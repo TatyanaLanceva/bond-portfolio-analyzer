@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Data & Results (личные/тяжёлые файлы)
+data/*.csv
+data/*.xlsx
+*.csv
+!data/.gitkeep
+output/
+results_*/
+*.png
+*.jpg
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints
