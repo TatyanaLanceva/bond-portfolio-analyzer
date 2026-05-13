@@ -9,7 +9,6 @@ env/
 ENV/
 
 # Data & Results (личные/тяжёлые файлы)
-data/*.csv
 data/*.xlsx
 *.csv
 !data/.gitkeep
