@@ -132,5 +132,4 @@ df = df.dropna(subset=['MATDATE', 'YEARS_TO_MATURITY'])
 - Мониторинг доступности 
 
 
-=======
->>>>>>> be4fd29fcca8c1cbfc6ca95b2e7d8bf048530542
+
