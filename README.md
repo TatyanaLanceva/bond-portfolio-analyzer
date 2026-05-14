@@ -61,6 +61,7 @@ df['YEARS_TO_MATURITY'] = ((df['MATDATE'] - pd.Timestamp.today()).dt.days / 365.
 numeric_cols = ['DIRTY_PRICE_RUB', 'YTM_PCT', 'COUPONPERCENT', 'FACEVALUE']
 df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors='coerce')
 df = df.dropna(subset=['MATDATE', 'YEARS_TO_MATURITY'])
+<<<<<<< HEAD
 
 ## 📊 Метрики оценки качества системы
 
@@ -131,3 +132,5 @@ df = df.dropna(subset=['MATDATE', 'YEARS_TO_MATURITY'])
 - Мониторинг доступности 
 
 
+=======
+>>>>>>> be4fd29fcca8c1cbfc6ca95b2e7d8bf048530542
