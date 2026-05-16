@@ -489,7 +489,7 @@ with tab5:
             df_bonds = _bonds_base
             total_raw = len(df_bonds)
             ytm_col = pd.to_numeric(df_bonds['YTM_PCT'], errors='coerce')
-            after_ml_filter = int((ytm_col >= 0) & (ytm_col <= 50)).sum()
+            after_ml_filter = ((ytm_col >= 0) & (ytm_col <= 50)).sum()
 
             metrics_path = Path("data/ml_metrics.json")
             if metrics_path.exists():
