@@ -1,0 +1,21 @@
+{
+  "R2": 0.7124889996617028,
+  "MAE": 2.8035702345077422,
+  "features": [
+    "YEARS_TO_MATURITY",
+    "COUPONPERCENT",
+    "LASTPRICE",
+    "RATING_SCORE",
+    "FACEVALUE"
+  ],
+  "algorithm": "HistGradientBoostingRegressor",
+  "hyperparameters": {
+    "max_depth": 5,
+    "learning_rate": 0.08,
+    "early_stopping": true,
+    "n_iter_no_change": 15,
+    "validation_fraction": 0.12,
+    "initial_max_iter": 200
+  },
+  "final_n_iter": 124
+}
