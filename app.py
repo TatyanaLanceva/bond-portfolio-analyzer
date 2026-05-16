@@ -86,7 +86,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("📊 Анализатор облигационного портфеля")
-st.caption("Версия 2.0: Налоговый оптимизатор, сохранение сделок, улучшенная аналитика")
+st.caption("📊 Bond Portfolio Analyzer — автоматизированный подбор и анализ облигационных портфелей")
 
 if st.session_state.pop("moex_refresh_ok", False):
     st.success("Котировки обновлены с MOEX → `data/bonds_current.csv` (резервная копия: `.csv.bak`).")
