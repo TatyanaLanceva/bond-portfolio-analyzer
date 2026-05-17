@@ -422,18 +422,20 @@ with tab5:
 
         | Компонент | Описание |
         |---|---|
-        | **Алгоритм** | `HistGradientBoostingRegressor` (scikit-learn) — градиентный бустинг над гистограммными деревьями |
-        | **max_depth** | 5 — глубина каждого дерева |
-        | **learning_rate** | 0.08 — шаг градиентного спуска |
-        | **Early stopping** | Включён (patience=15 итераций, validation_fraction=0.12) |
+        | **Алгоритм** | `RandomForestRegressor` (scikit-learn) — ансамбль решающих деревьев |
+        | **GridSearch** | 5-fold CV по n_estimators, max_depth, min_samples_split, min_samples_leaf |
+        | **Гиперпараметры** | Подобраны автоматически (лучшая комбинация по MAE) |
         | **Валидация** | 80/20 train/test split (random_state=42) |
 
-        **Признаки (5):**
+        **Признаки (8):**
         - `YEARS_TO_MATURITY` — срок до погашения (лет)
         - `COUPONPERCENT` — купонная ставка (%)
         - `LASTPRICE` — цена в % от номинала
         - `RATING_SCORE` — рейтинг-скор (0=AAA … 16=CCC)
         - `FACEVALUE` — номинал (₽)
+        - `IS_GOVERNMENT` — флаг ОФЗ (1) / корпоративная (0)
+        - `MOD_DURATION` — модифицированная дюрация (годы)
+        - `COUPONS_REMAINING` — число оставшихся купонных выплат
 
         **Целевая переменная:** `YTM_PCT` — доходность к погашению (%)
 
@@ -542,17 +544,18 @@ with tab5:
 
                     # --- Архитектура ---
                     with st.expander("🏗 Архитектура и гиперпараметры", expanded=True):
+                        gsp = hp.get("grid_search_params", {})
                         arch_cols = st.columns(2)
                         with arch_cols[0]:
                             st.markdown("**Алгоритм:** `{}`".format(_m.get("algorithm", "—")))
-                            st.markdown("**Признаки:** `{}`".format(", ".join(_m.get("features", []))))
-                            st.markdown("**Max depth:** {}".format(hp.get("max_depth", "—")))
-                            st.markdown("**Learning rate:** {}".format(hp.get("learning_rate", "—")))
+                            st.markdown("**Признаки ({}):** `{}`".format(len(_m.get("features", [])), ", ".join(_m.get("features", []))))
+                            st.markdown("**n_estimators:** {}".format(gsp.get("n_estimators", "—")))
+                            st.markdown("**max_depth:** {}".format(gsp.get("max_depth", "—")))
                         with arch_cols[1]:
-                            st.markdown("**Early stopping:** {}".format(hp.get("early_stopping", "—")))
-                            st.markdown("**Patience:** {}".format(hp.get("n_iter_no_change", "—")))
-                            st.markdown("**Val. fraction:** {}".format(hp.get("validation_fraction", "—")))
-                            st.markdown("**Max итераций:** {}".format(hp.get("initial_max_iter", "—")))
+                            st.markdown("**min_samples_split:** {}".format(gsp.get("min_samples_split", "—")))
+                            st.markdown("**min_samples_leaf:** {}".format(gsp.get("min_samples_leaf", "—")))
+                            st.markdown("**CV folds:** {}".format(hp.get("cv_folds", "—")))
+                            st.markdown("**Scoring:** `{}`".format(hp.get("scoring", "—")))
 
                     # Пометка о последнем обучении
                     st.caption(

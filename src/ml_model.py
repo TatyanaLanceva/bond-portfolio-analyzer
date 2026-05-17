@@ -2,6 +2,9 @@
 src/ml_model.py
 ML-прогноз справедливой доходности и ранжирование выпусков внутри однородных групп
 (рейтинг × горизонт) по дополнительной доходности относительно модели.
+
+Улучшенная версия: RandomForestRegressor + новые признаки (флаг ОФЗ,
+модифицированная дюрация, число оставшихся купонов) + GridSearch гиперпараметров.
 """
 import json
 import pickle
@@ -9,21 +12,30 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.preprocessing import StandardScaler
 
 MODEL_PATH = "data/ml_model.pkl"
 SCALER_PATH = "data/ml_scaler.pkl"
 METRICS_PATH = "data/ml_metrics.json"
 
-# Признаки без целевой YTM: модель учится на «рыночном профиле» бумаги
-FEATURES = ['YEARS_TO_MATURITY', 'COUPONPERCENT', 'LASTPRICE', 'RATING_SCORE', 'FACEVALUE']
+# Признаки (базовые + новые)
+FEATURES = [
+    'YEARS_TO_MATURITY',      # срок до погашения (лет)
+    'COUPONPERCENT',           # купонная ставка (%)
+    'LASTPRICE',               # цена в % от номинала
+    'RATING_SCORE',            # рейтинг-скор (0=AAA … 16=CCC)
+    'FACEVALUE',               # номинал (₽)
+    'IS_GOVERNMENT',           # 1 — ОФЗ, 0 — корпоративная
+    'MOD_DURATION',            # модифицированная дюрация (годы)
+    'COUPONS_REMAINING',       # число оставшихся купонных выплат
+]
 
 
 def _ensure_lastprice(df_m: pd.DataFrame) -> pd.DataFrame:
-    """Цена в % от номинала (как в исходном проекте); нужна для признака LASTPRICE."""
+    """Цена в % от номинала; нужна для признака LASTPRICE."""
     out = df_m.copy()
     if 'LASTPRICE' in out.columns and not out['LASTPRICE'].isna().all():
         out['LASTPRICE'] = pd.to_numeric(out['LASTPRICE'], errors='coerce')
@@ -34,6 +46,38 @@ def _ensure_lastprice(df_m: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _add_engineered_features(df_m: pd.DataFrame) -> pd.DataFrame:
+    """
+    Добавляет новые признаки:
+    - IS_GOVERNMENT — флаг государственной облигации (RATING == 'AAA' и имя начинается с 'ОФЗ')
+    - MOD_DURATION — модифицированная дюрация ≈ YEARS_TO_MATURITY / (1 + YTM_PCT/100)
+    - COUPONS_REMAINING — количество оставшихся полугодовых купонов до погашения
+    """
+    out = df_m.copy()
+
+    # IS_GOVERNMENT: ОФЗ — если рейтинг AAA и краткое имя начинается с "ОФЗ"
+    out['IS_GOVERNMENT'] = (
+        (out.get('RATING', '').astype(str).str.strip() == 'AAA') &
+        (out.get('SHORTNAME', '').astype(str).str.strip().str.upper().str.startswith('ОФЗ'))
+    ).astype(int)
+
+    # MOD_DURATION: приближённая модифицированная дюрация
+    ytm = pd.to_numeric(out.get('YTM_PCT', 0), errors='coerce').fillna(0)
+    yrs = pd.to_numeric(out.get('YEARS_TO_MATURITY', 0), errors='coerce').fillna(0)
+    out['MOD_DURATION'] = yrs / (1.0 + ytm / 100.0)
+    out['MOD_DURATION'] = out['MOD_DURATION'].replace([np.inf, -np.inf], 0).fillna(0)
+
+    # COUPONS_REMAINING: целое число купонных периодов (полугодия) до погашения
+    cpn = pd.to_numeric(out.get('COUPONPERCENT', 0), errors='coerce').fillna(0)
+    # Если купон > 0, то число выплат = 2 * YEARS_TO_MATURITY (округляем вверх)
+    out['COUPONS_REMAINING'] = np.where(
+        cpn > 0,
+        np.ceil(yrs * 2.0).astype(int),
+        0
+    )
+    return out
+
+
 def prepare_data(df, ytm_min: float = 0.0, ytm_max: float = 50.0):
     """
     X, y и список фактических колонок для обучения / инференса.
@@ -41,6 +85,7 @@ def prepare_data(df, ytm_min: float = 0.0, ytm_max: float = 50.0):
     аномальные выбросы MOEX (например, 60000%) не портили модель.
     """
     df_m = _ensure_lastprice(df)
+    df_m = _add_engineered_features(df_m)
     use_cols = [c for c in FEATURES if c in df_m.columns]
     y = pd.to_numeric(df_m['YTM_PCT'], errors='coerce')
     mask = (y >= ytm_min) & (y <= ytm_max)
@@ -73,22 +118,20 @@ def assign_ml_groups(df: pd.DataFrame) -> pd.DataFrame:
 
 def train_and_save_model(df):
     """
-    Обучение HistGradientBoostingRegressor: предсказание YTM по структуре бумаги,
-    метрики — на отложенной выборке; итоговая модель — на полном наборе с early stopping.
+    Обучение RandomForestRegressor с GridSearch гиперпараметров.
 
     **Архитектура модели:**
-    - Алгоритм: градиентный бустинг над гистограммными деревьями (HistGradientBoostingRegressor)
-    - Гиперпараметры: max_depth=5, learning_rate=0.08, early_stopping с patience=15 итераций
-    - Признаки: срок (лет), купон (%), цена (% от номинала), рейтинг-скор, номинал (₽)
+    - Алгоритм: RandomForestRegressor (scikit-learn) — ансамбль решающих деревьев
+    - Признаки (8): срок, купон, цена (% от номинала), рейтинг-скор, номинал,
+      флаг ОФЗ, модифицированная дюрация, число оставшихся купонов
     - Целевая переменная: YTM_PCT (доходность к погашению)
-    - Валидация: 80/20 train/test split; метрики R² и MAE на тестовой выборке
-    - Финальная модель: обучается на 100% данных с той же архитектурой, но без валидационного
-      разделения (использует всю информацию). Количество итераций фиксировано = best_iter,
-      полученному на валидационном обучении.
+    - Валидация: 80/20 train/test split; GridSearch 5-fold CV
+    - Метрики: R² и MAE на тестовой выборке
+    - Финальная модель: лучшая по GridSearch, обучена на всех данных
     """
     X, y, cols = prepare_data(df)
-    if len(X) < 30:
-        raise ValueError("Недостаточно данных для обучения (нужно ≥ 30 строк)")
+    if len(X) < 50:
+        raise ValueError("Недостаточно данных для обучения (нужно ≥ 50 строк)")
 
     X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, random_state=42)
 
@@ -96,63 +139,62 @@ def train_and_save_model(df):
     X_tr_s = scaler.fit_transform(X_tr)
     X_te_s = scaler.transform(X_te)
 
-    # --- Базовая модель с early stopping для определения оптимального числа итераций ---
-    base_est = HistGradientBoostingRegressor(
-        max_iter=200,
-        max_depth=5,
-        learning_rate=0.08,
-        random_state=42,
-        early_stopping=True,
-        validation_fraction=0.12,
-        n_iter_no_change=15,
+    # --- GridSearch для RandomForest ---
+    base_rf = RandomForestRegressor(random_state=42, n_jobs=-1)
+    param_grid = {
+        'n_estimators': [100, 200, 300],
+        'max_depth': [5, 10, 15, None],
+        'min_samples_split': [2, 5, 10],
+        'min_samples_leaf': [1, 2, 4],
+    }
+    gs = GridSearchCV(
+        base_rf, param_grid,
+        cv=5,
+        scoring='neg_mean_absolute_error',
+        n_jobs=-1,
+        verbose=0,
     )
-    base_est.fit(X_tr_s, y_tr)
-    y_hat_te = base_est.predict(X_te_s)
+    gs.fit(X_tr_s, y_tr)
+    best_params = gs.best_params_
+    best_est = gs.best_estimator_
+
+    y_hat_te = best_est.predict(X_te_s)
 
     metrics = {
         "R2": float(r2_score(y_te, y_hat_te)),
         "MAE": float(mean_absolute_error(y_te, y_hat_te)),
         "features": cols,
-        "algorithm": "HistGradientBoostingRegressor",
+        "algorithm": "RandomForestRegressor",
         "hyperparameters": {
-            "max_depth": 5,
-            "learning_rate": 0.08,
-            "early_stopping": True,
-            "n_iter_no_change": 15,
-            "validation_fraction": 0.12,
-            "initial_max_iter": 200,
+            "grid_search_params": best_params,
+            "cv_folds": 5,
+            "scoring": "neg_mean_absolute_error",
         },
     }
 
-    # Определяем наилучшее число итераций по валидационной модели
-    _nit = getattr(base_est, "n_iter_", None)
-    _arr = np.asarray(_nit).ravel() if _nit is not None else np.array([120])
-    best_iter = int(_arr[0])
-    # Небольшой запас + ограничение сверху для предотвращения переобучения
-    final_iter = min(max(best_iter + 10, 50), 250)
-    metrics["final_n_iter"] = final_iter
-
-    # --- Финальная модель на всех данных ---
+    # --- Финальная модель на всех данных (с лучшими параметрами) ---
     scaler_full = StandardScaler()
     X_full_s = scaler_full.fit_transform(X)
 
-    model = HistGradientBoostingRegressor(
-        max_iter=final_iter,
-        max_depth=5,
-        learning_rate=0.08,
+    final_model = RandomForestRegressor(
+        n_estimators=best_params.get('n_estimators', 200),
+        max_depth=best_params.get('max_depth', 10),
+        min_samples_split=best_params.get('min_samples_split', 2),
+        min_samples_leaf=best_params.get('min_samples_leaf', 1),
         random_state=42,
+        n_jobs=-1,
     )
-    model.fit(X_full_s, y)
+    final_model.fit(X_full_s, y)
 
     Path("data").mkdir(exist_ok=True)
     with open(MODEL_PATH, 'wb') as f:
-        pickle.dump(model, f)
+        pickle.dump(final_model, f)
     with open(SCALER_PATH, 'wb') as f:
         pickle.dump(scaler_full, f)
     with open(METRICS_PATH, 'w', encoding='utf-8') as f:
         json.dump(metrics, f, ensure_ascii=False, indent=2)
 
-    return model, scaler_full, metrics
+    return final_model, scaler_full, metrics
 
 
 def load_model():
@@ -175,6 +217,7 @@ def load_model():
 def predict_ytm(df_input, model, scaler, features):
     """Точечный прогноз YTM (для совместимости с вкладкой и отчётами)."""
     df_m = _ensure_lastprice(df_input)
+    df_m = _add_engineered_features(df_m)
     X = df_m[[c for c in features if c in df_m.columns]].reindex(columns=features, fill_value=0).fillna(0)
     return model.predict(scaler.transform(X))
 
@@ -202,4 +245,4 @@ if __name__ == "__main__":
     from src.core import load_bonds_data
 
     _, _, m = train_and_save_model(load_bonds_data())
-    print("Обучение завершено:", m)
+    print("Обучение завершено:", json.dumps(m, indent=2, ensure_ascii=False))

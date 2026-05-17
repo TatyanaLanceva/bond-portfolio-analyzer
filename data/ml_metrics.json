@@ -1,21 +1,25 @@
 {
-  "R2": 0.7124889996617028,
-  "MAE": 2.8035702345077422,
+  "R2": 0.7716931198954347,
+  "MAE": 2.218709728813563,
   "features": [
     "YEARS_TO_MATURITY",
     "COUPONPERCENT",
     "LASTPRICE",
     "RATING_SCORE",
-    "FACEVALUE"
+    "FACEVALUE",
+    "IS_GOVERNMENT",
+    "MOD_DURATION",
+    "COUPONS_REMAINING"
   ],
-  "algorithm": "HistGradientBoostingRegressor",
+  "algorithm": "RandomForestRegressor",
   "hyperparameters": {
-    "max_depth": 5,
-    "learning_rate": 0.08,
-    "early_stopping": true,
-    "n_iter_no_change": 15,
-    "validation_fraction": 0.12,
-    "initial_max_iter": 200
-  },
-  "final_n_iter": 124
+    "grid_search_params": {
+      "max_depth": null,
+      "min_samples_leaf": 1,
+      "min_samples_split": 2,
+      "n_estimators": 300
+    },
+    "cv_folds": 5,
+    "scoring": "neg_mean_absolute_error"
+  }
 }
