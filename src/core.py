@@ -230,12 +230,11 @@ def build_portfolio(df: pd.DataFrame, strategy: str, budget: float,
         for _, bond in pool.head(8).iterrows():
             if not try_buy(bond, budget / 6.0): break
 
-    # Добиваем остаток
-    if remaining_budget > budget * 0.1:
-        for _, bond in pool.iterrows():
-            if bond['ISIN'] not in bought_isins:
-                if remaining_budget > bond['DIRTY_PRICE_RUB']:
-                    try_buy(bond)
+    # Добиваем остаток (без минимального порога)
+    for _, bond in pool.iterrows():
+        if bond['ISIN'] not in bought_isins:
+            if remaining_budget > bond['DIRTY_PRICE_RUB']:
+                try_buy(bond)
 
     return pd.DataFrame(portfolio) if portfolio else pd.DataFrame()
 

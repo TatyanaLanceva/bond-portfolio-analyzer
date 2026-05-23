@@ -139,68 +139,32 @@ def fetch_moex_bonds_dataframe(
 def _apply_smartlab_ratings(
     df: pd.DataFrame,
     cache_path: str | Path = "data/rating_cache.json",
-    pause_sec: float = 0.0,  # 0 — задержка только между реальными запросами (кэш без паузы)
+    pause_sec: float = 2.0,
 ) -> pd.DataFrame:
     """
-    Обогащает датафрейм рейтингами со smart-lab.ru для корпоративных бумаг (не ОФЗ).
-    Если бумага уже в кэше — берёт оттуда.
+    Последовательное обогащение датафрейма рейтингами со smart-lab.ru.
+    Использует только кэш — реальные запросы делаются только через
+    отдельный скрипт tools/enrich_ratings.py.
     """
     try:
-        from .smartlab_ratings import RatingCache, get_bond_rating
+        from .smartlab_ratings import RatingCache
     except ImportError:
-        from smartlab_ratings import RatingCache, get_bond_rating
+        from smartlab_ratings import RatingCache
 
     cache = RatingCache(cache_path)
     out = df.copy()
-    rating_updates: dict[int, str] = {}
     
-    # Берём только корпоративные (не ОФЗ), у которых рейтинг-заглушка BBB
     corp_mask = out["RATING"] != "AAA"
     corp_idx = out.index[corp_mask].tolist()
-    
     if not corp_idx:
-        logger.info("Нет корпоративных бумаг для парсинга рейтингов.")
         return out
 
-    logger.info(
-        "Парсинг рейтингов smart-lab.ru для %d корпоративных выпусков...",
-        len(corp_idx),
-    )
-    
-    for n, idx in enumerate(corp_idx, 1):
+    for idx in corp_idx:
         isin = str(out.at[idx, "ISIN"]).strip()
-        
-        # Проверяем кэш
         cached = cache.get(isin)
         if cached is not None and cached[0] not in ("Нет данных", "Нет ISIN", "Ошибка"):
-            rating_updates[idx] = cached[0]
-            logger.debug("[%d/%d] %s ← кэш (%s)", n, len(corp_idx), isin, cached[0])
-            continue
-        
-        # Реальный запрос
-        rating, _ = get_bond_rating(isin)
-        if rating not in ("Нет данных", "Нет ISIN", "Ошибка"):
-            rating_updates[idx] = rating
-            logger.info("[%d/%d] %s → %s", n, len(corp_idx), isin, rating)
-        else:
-            logger.warning("[%d/%d] %s → не найден (%s)", n, len(corp_idx), isin, rating)
-        
-        cache.set(isin, rating, "")
-        if pause_sec > 0 and n < len(corp_idx):
-            import time
-            time.sleep(pause_sec)
+            out.at[idx, "RATING"] = cached[0]
 
-    cache.save()
-    
-    for idx, rating in rating_updates.items():
-        out.at[idx, "RATING"] = rating
-    
-    updated_count = len(rating_updates)
-    logger.info(
-        "Рейтинги обновлены для %d / %d корпоративных бумаг.",
-        updated_count,
-        len(corp_idx),
-    )
     return out
 
 

@@ -8,13 +8,14 @@
 """
 from __future__ import annotations
 
+import concurrent.futures
 import hashlib
 import json
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 
 BONDIZATION_URL = (
@@ -81,16 +82,30 @@ def _save_cache(cache: dict) -> None:
     CACHE_PATH.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _check_one_isin(isin: str, timeout: float = 20.0) -> str | None:
+    """Проверяет один ISIN. Возвращает ISIN, если амортизация есть, иначе None."""
+    if moex_bond_has_amortization_schedule(isin, timeout=timeout):
+        return isin
+    return None
+
+
 def moex_amortizing_isins(
     isins: Iterable[str],
     pause_sec: float = 0.0,
-    progress_callback=None,
+    progress_callback: Callable[[int, int, str], None] | None = None,
+    max_workers: int = 10,
 ) -> set[str]:
     """
-    Запросы по одному ISIN. Результаты кэшируются в файл.
+    Параллельные запросы MOEX bondization (ThreadPoolExecutor).
+    Результаты кэшируются в файл.
 
     Если хеш набора ISIN не изменился и кэш свежий (< 24 ч) — возвращает
     сохранённый результат мгновенно, без единого HTTP-запроса.
+
+    Parameters
+    ----------
+    max_workers : int
+        Число параллельных потоков (по умолчанию 10).
     """
     isins = list(dict.fromkeys(str(i).strip() for i in isins if str(i).strip().startswith("RU")))
     if not isins:
@@ -106,16 +121,24 @@ def moex_amortizing_isins(
         if time.time() - ts < CACHE_TTL_HOURS * 3600:
             return set(cached_entry.get("amortizing_isins", []))
 
-    # Нет кэша или устарел — делаем реальные запросы
+    # Нет кэша или устарел — делаем реальные запросы параллельно
     out: set[str] = set()
     total = len(isins)
-    for n, isin in enumerate(isins, start=1):
-        if moex_bond_has_amortization_schedule(isin):
-            out.add(isin)
-        if progress_callback:
-            progress_callback(n, total, isin)
-        if pause_sec > 0 and n < total:
-            time.sleep(pause_sec)
+    completed = 0
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_isin = {executor.submit(_check_one_isin, isin): isin for isin in isins}
+        for future in concurrent.futures.as_completed(future_to_isin):
+            isin = future_to_isin[future]
+            completed += 1
+            try:
+                result = future.result()
+                if result:
+                    out.add(result)
+            except Exception:
+                pass  # Ошибка сети — бумага считается неамортизируемой
+            if progress_callback:
+                progress_callback(completed, total, isin)
 
     # Сохраняем в кэш
     cache[ckey] = {

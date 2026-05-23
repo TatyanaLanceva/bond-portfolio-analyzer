@@ -12,6 +12,13 @@ ENV/
 data/*.xlsx
 *.csv
 !data/.gitkeep
+data/*.csv.bak
+data/amortizing_cache.json
+data/rating_cache.json
+data/ml_model.pkl
+data/ml_scaler.pkl
+data/ml_metrics.json
+data/portfolio_journal.csv
 output/
 results_*/
 *.png

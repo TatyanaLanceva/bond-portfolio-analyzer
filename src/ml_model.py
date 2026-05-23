@@ -12,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.preprocessing import StandardScaler
@@ -67,14 +67,28 @@ def _add_engineered_features(df_m: pd.DataFrame) -> pd.DataFrame:
     out['MOD_DURATION'] = yrs / (1.0 + ytm / 100.0)
     out['MOD_DURATION'] = out['MOD_DURATION'].replace([np.inf, -np.inf], 0).fillna(0)
 
-    # COUPONS_REMAINING: целое число купонных периодов (полугодия) до погашения
+    # COUPONS_REMAINING: число оставшихся полугодовых купонных выплат
+    # Если известна MATDATE — считаем точное число периодов до даты погашения.
+    # Если MATDATE нет — используем приближение: 2 * YEARS_TO_MATURITY.
     cpn = pd.to_numeric(out.get('COUPONPERCENT', 0), errors='coerce').fillna(0)
-    # Если купон > 0, то число выплат = 2 * YEARS_TO_MATURITY (округляем вверх)
-    out['COUPONS_REMAINING'] = np.where(
-        cpn > 0,
-        np.ceil(yrs * 2.0).astype(int),
-        0
-    )
+    matdate = pd.to_datetime(out.get('MATDATE'), errors='coerce')
+    today = pd.Timestamp.today().normalize()
+    if matdate.notna().any():
+        # Точное число полугодовых периодов от сегодня до даты погашения
+        days_remaining = (matdate - today).dt.days.clip(lower=0)
+        exact_periods = np.ceil(days_remaining / 182.625).astype(int)  # 182.625 ≈ полугодие
+        out['COUPONS_REMAINING'] = np.where(
+            cpn > 0,
+            exact_periods,
+            0
+        )
+    else:
+        # Приближение, если MATDATE недоступна
+        out['COUPONS_REMAINING'] = np.where(
+            cpn > 0,
+            np.ceil(yrs * 2.0).astype(int),
+            0
+        )
     return out
 
 
@@ -118,14 +132,16 @@ def assign_ml_groups(df: pd.DataFrame) -> pd.DataFrame:
 
 def train_and_save_model(df):
     """
-    Обучение RandomForestRegressor с GridSearch гиперпараметров.
+    Обучение с выбором лучшего алгоритма: RandomForestRegressor vs GradientBoostingRegressor.
+    GridSearch 5-fold CV перебирает оба алгоритма + их гиперпараметры.
+    Финальная модель — лучшая комбинация, обученная на 100% данных.
 
     **Архитектура модели:**
-    - Алгоритм: RandomForestRegressor (scikit-learn) — ансамбль решающих деревьев
+    - Алгоритмы: RandomForestRegressor / GradientBoostingRegressor (scikit-learn)
     - Признаки (8): срок, купон, цена (% от номинала), рейтинг-скор, номинал,
       флаг ОФЗ, модифицированная дюрация, число оставшихся купонов
     - Целевая переменная: YTM_PCT (доходность к погашению)
-    - Валидация: 80/20 train/test split; GridSearch 5-fold CV
+    - Валидация: 80/20 train/test split; GridSearch 5-fold CV по двум алгоритмам
     - Метрики: R² и MAE на тестовой выборке
     - Финальная модель: лучшая по GridSearch, обучена на всех данных
     """
@@ -139,51 +155,81 @@ def train_and_save_model(df):
     X_tr_s = scaler.fit_transform(X_tr)
     X_te_s = scaler.transform(X_te)
 
-    # --- GridSearch для RandomForest ---
-    base_rf = RandomForestRegressor(random_state=42, n_jobs=-1)
-    param_grid = {
-        'n_estimators': [100, 200, 300],
-        'max_depth': [5, 10, 15, None],
-        'min_samples_split': [2, 5, 10],
-        'min_samples_leaf': [1, 2, 4],
-    }
-    gs = GridSearchCV(
-        base_rf, param_grid,
-        cv=5,
-        scoring='neg_mean_absolute_error',
-        n_jobs=-1,
-        verbose=0,
-    )
-    gs.fit(X_tr_s, y_tr)
-    best_params = gs.best_params_
-    best_est = gs.best_estimator_
+    # --- GridSearch: RandomForest + GradientBoosting ---
+    # GridSearchCV не умеет перебирать разные estimators в одном param_grid,
+    # поэтому делаем два независимых поиска и выбираем лучший по CV-score.
+    param_groups = [
+        {
+            'estimator': RandomForestRegressor(random_state=42, n_jobs=-1),
+            'grid': {
+                'n_estimators': [100, 200, 300],
+                'max_depth': [5, 10, 15, None],
+                'min_samples_split': [2, 5, 10],
+                'min_samples_leaf': [1, 2, 4],
+            },
+        },
+        {
+            'estimator': GradientBoostingRegressor(random_state=42),
+            'grid': {
+                'n_estimators': [100, 200],
+                'max_depth': [3, 5, 7],
+                'min_samples_split': [2, 5],
+                'learning_rate': [0.05, 0.1, 0.2],
+            },
+        },
+    ]
 
-    y_hat_te = best_est.predict(X_te_s)
+    best_overall = None
+    best_score = -float('inf')
+    best_algo_name = ""
+    best_params_found = {}
+
+    for group in param_groups:
+        est = group['estimator']
+        algo_name = type(est).__name__
+        g = GridSearchCV(est, group['grid'], cv=5, scoring='neg_mean_absolute_error', n_jobs=-1, verbose=0)
+        g.fit(X_tr_s, y_tr)
+        if g.best_score_ > best_score:
+            best_score = g.best_score_
+            best_overall = g.best_estimator_
+            best_algo_name = algo_name
+            best_params_found = g.best_params_
+
+    y_hat_te = best_overall.predict(X_te_s)
 
     metrics = {
         "R2": float(r2_score(y_te, y_hat_te)),
         "MAE": float(mean_absolute_error(y_te, y_hat_te)),
         "features": cols,
-        "algorithm": "RandomForestRegressor",
+        "algorithm": best_algo_name,
         "hyperparameters": {
-            "grid_search_params": best_params,
+            "grid_search_params": best_params_found,
             "cv_folds": 5,
             "scoring": "neg_mean_absolute_error",
         },
     }
 
-    # --- Финальная модель на всех данных (с лучшими параметрами) ---
+    # --- Финальная модель на всех данных (лучший алгоритм + параметры) ---
     scaler_full = StandardScaler()
     X_full_s = scaler_full.fit_transform(X)
 
-    final_model = RandomForestRegressor(
-        n_estimators=best_params.get('n_estimators', 200),
-        max_depth=best_params.get('max_depth', 10),
-        min_samples_split=best_params.get('min_samples_split', 2),
-        min_samples_leaf=best_params.get('min_samples_leaf', 1),
-        random_state=42,
-        n_jobs=-1,
-    )
+    if best_algo_name == "RandomForestRegressor":
+        final_model = RandomForestRegressor(
+            n_estimators=best_params_found.get('n_estimators', 200),
+            max_depth=best_params_found.get('max_depth', 10),
+            min_samples_split=best_params_found.get('min_samples_split', 2),
+            min_samples_leaf=best_params_found.get('min_samples_leaf', 1),
+            random_state=42,
+            n_jobs=-1,
+        )
+    else:
+        final_model = GradientBoostingRegressor(
+            n_estimators=best_params_found.get('n_estimators', 200),
+            max_depth=best_params_found.get('max_depth', 5),
+            min_samples_split=best_params_found.get('min_samples_split', 2),
+            learning_rate=best_params_found.get('learning_rate', 0.1),
+            random_state=42,
+        )
     final_model.fit(X_full_s, y)
 
     Path("data").mkdir(exist_ok=True)
