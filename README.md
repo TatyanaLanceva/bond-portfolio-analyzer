@@ -564,38 +564,76 @@ DIRTY_PRICE_RUB = FACEVALUE × WAPRICE / 100 + ACCRUEDINT
 
 ---
 
+### Структура k8s/
+
+```
+k8s/
+├── namespace.yaml     # Изолированное пространство имён bond-portfolio
+├── configmap.yaml     # Переменные окружения (TZ, Streamlit настройки)
+├── pvc.yaml           # PersistentVolumeClaim 1Gi для /app/data
+├── deployment.yaml    # Init-контейнеры + основной контейнер
+│   ├── init: clone-repo     — клонирование репозитория (alpine/git)
+│   ├── init: install-deps   — установка зависимостей (python:3.10-slim)
+│   └── main: bond-portfolio-analyzer — запуск Streamlit (python:3.10-slim)
+├── service.yaml       # ClusterIP:80 → containerPort 8501
+└── ingress.yaml       # (Опционально) Ingress для внешнего доступа
+```
+
+---
+
 ## Развёртывание
 
-### Локальный запуск
+### Требования
+
+- kubectl
+- Доступ к Kubernetes-кластеру (локальный minikube / kind / облачный Managed K8s, например Yandex Managed K8s)
+
+### Развёртывание
+
+```bash
+# 1. Развернуть все ресурсы одной командой
+kubectl apply -f k8s/
+
+# 2. (Опционально) Ingress — если требуется внешний доступ
+kubectl apply -f k8s/ingress.yaml
+```
+
+### Проверка статуса
+
+```bash
+kubectl get all -n bond-portfolio
+kubectl get pvc -n bond-portfolio
+kubectl get pods -n bond-portfolio -w   # следить за инициализацией
+```
+
+### Доступ к приложению
+
+- **ClusterIP (по умолчанию):** проброс порта для локального доступа
+  ```bash
+  kubectl port-forward -n bond-portfolio service/bond-portfolio-service 8501:80
+  ```
+  Приложение будет доступно по адресу `http://localhost:8501`.
+
+- **Ingress (если настроен):**
+  Добавьте в файл hosts (`/etc/hosts` на Linux/Mac или `C:\Windows\System32\drivers\etc\hosts` на Windows):
+  ```
+  127.0.0.1 bond-portfolio.local
+  ```
+  (или IP вашего ingress-контроллера) и откройте `http://bond-portfolio.local`.
+
+- **NodePort / LoadBalancer:** измените `type: ClusterIP` на `type: NodePort` или `type: LoadBalancer` в `k8s/service.yaml`.
+
+### Данные
+
+PersistentVolumeClaim `bond-portfolio-data` монтируется в `/app/data` внутри контейнера. При удалении пода данные **сохраняются**. При удалении PVC данные теряются.
+
+**Важно:** При первом развёртывании в пустом PVC необходимо один раз выполнить первичную настройку (загрузка котировок MOEX, парсинг рейтингов, обучение ML-модели) — см. раздел «Первичная настройка (один раз)» выше.
+
+### Локальный запуск (без Kubernetes)
 
 ```bash
 streamlit run app.py
 ```
-
-### Сервер (Linux)
-
-```bash
-# Установка системных зависимостей
-sudo apt update && sudo apt install -y python3-pip
-
-# Клонирование и установка
-git clone https://github.com/TatyanaLanceva/bond-portfolio-analyzer.git
-cd bond-portfolio-analyzer
-pip install -r requirements.txt
-
-# Запуск как сервис (screen/tmux)
-screen -S bond-portfolio
-streamlit run app.py --server.port 8501 --server.address 0.0.0.0
-```
-
-### Streamlit Cloud (предпочтительно)
-
-1. Загрузить проект на GitHub
-2. Подключить репозиторий на [Streamlit Cloud](https://streamlit.io/cloud)
-3. Указать `app.py` как entry point
-4. В `requirements.txt` уже указаны все зависимости
-
-**Важно:** При развёртывании на Streamlit Cloud потребуется настроить загрузку данных (MOEX + smart-lab) — либо предварительно сгенерировать файлы локально и закоммитить их в репозиторий.
 
 ---
 

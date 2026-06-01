@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bond-portfolio-config
+  namespace: bond-portfolio
+data:
+  TZ: "Europe/Moscow"
+  STREAMLIT_SERVER_MAX_UPLOAD_SIZE: "10"
+  STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
