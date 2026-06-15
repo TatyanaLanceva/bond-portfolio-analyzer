@@ -39,7 +39,7 @@ def load_bonds_data(file_path: str = "data/bonds_current.csv") -> pd.DataFrame:
     
     # Фильтрация
     df = df[df['ISIN'].astype(str).str.startswith('RU')]
-    df = df[(df['DIRTY_PRICE_RUB'] > 0) & (df['YTM_PCT'] >= 0) & (df['YEARS_TO_MATURITY'] > 0)]
+    df = df[(df['DIRTY_PRICE_RUB'] > 0) & (df['YTM_PCT'] >= 0) & (df['YTM_PCT'] <= 50) & (df['YEARS_TO_MATURITY'] > 0)]
     df = df.dropna(subset=['MATDATE'])
     df['MATDATE'] = pd.to_datetime(df['MATDATE'], errors='coerce').dt.normalize()
 
