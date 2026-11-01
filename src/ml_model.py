@@ -67,14 +67,28 @@ def _add_engineered_features(df_m: pd.DataFrame) -> pd.DataFrame:
     out['MOD_DURATION'] = yrs / (1.0 + ytm / 100.0)
     out['MOD_DURATION'] = out['MOD_DURATION'].replace([np.inf, -np.inf], 0).fillna(0)
 
-    # COUPONS_REMAINING: целое число купонных периодов (полугодия) до погашения
+    # COUPONS_REMAINING: число оставшихся полугодовых купонных выплат
+    # Если известна MATDATE — считаем точное число периодов до даты погашения.
+    # Если MATDATE нет — используем приближение: 2 * YEARS_TO_MATURITY.
     cpn = pd.to_numeric(out.get('COUPONPERCENT', 0), errors='coerce').fillna(0)
-    # Если купон > 0, то число выплат = 2 * YEARS_TO_MATURITY (округляем вверх)
-    out['COUPONS_REMAINING'] = np.where(
-        cpn > 0,
-        np.ceil(yrs * 2.0).astype(int),
-        0
-    )
+    matdate = pd.to_datetime(out.get('MATDATE'), errors='coerce')
+    today = pd.Timestamp.today().normalize()
+    if matdate.notna().any():
+        # Точное число полугодовых периодов от сегодня до даты погашения
+        days_remaining = (matdate - today).dt.days.clip(lower=0)
+        exact_periods = np.ceil(days_remaining / 182.625).astype(int)  # 182.625 ≈ полугодие
+        out['COUPONS_REMAINING'] = np.where(
+            cpn > 0,
+            exact_periods,
+            0
+        )
+    else:
+        # Приближение, если MATDATE недоступна
+        out['COUPONS_REMAINING'] = np.where(
+            cpn > 0,
+            np.ceil(yrs * 2.0).astype(int),
+            0
+        )
     return out
 
 

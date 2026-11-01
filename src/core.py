@@ -219,13 +219,26 @@ def build_portfolio(df: pd.DataFrame, strategy: str, budget: float,
         for year in range(1, 6):
             bucket = pool[(pool['YEARS_TO_MATURITY'] >= year - 0.5) & (pool['YEARS_TO_MATURITY'] < year + 0.5)]
             if bucket.empty: continue
-            if not try_buy(bucket.iloc[0], target_per_year): break
+            # Перебираем несколько бумаг из bucket, а не только первую
+            bought_this_year = False
+            # Сортируем по цене (дешевле сначала) и перебираем
+            for idx in bucket.nsmallest(3, 'DIRTY_PRICE_RUB').index:
+                if try_buy(bucket.loc[idx], target_per_year):
+                    bought_this_year = True
+                    break
+            if not bought_this_year:
+                # Пытаемся купить любую доступную бумагу в этом году
+                for idx in bucket.index:
+                    if try_buy(bucket.loc[idx], target_per_year):
+                        bought_this_year = True
+                        break
             
     elif strategy == "Barbell":
         for part_pool in [pool[pool['YEARS_TO_MATURITY'] <= 1.5], pool[pool['YEARS_TO_MATURITY'] >= 4.0]]:
             if part_pool.empty: continue
-            for _, bond in part_pool.head(2).iterrows():
-                if not try_buy(bond, budget * 0.25): break
+            # Пробуем купить несколько бумаг из каждой части, а не только 2
+            for _, bond in part_pool.iterrows():
+                if not try_buy(bond, budget * 0.25): continue
     else:  # Wheel
         for _, bond in pool.head(8).iterrows():
             if not try_buy(bond, budget / 6.0): break
@@ -267,6 +280,13 @@ def calculate_full_cashflow(portfolio: pd.DataFrame, tax_rate: float = 0.0) -> p
     if portfolio.empty: return pd.DataFrame()
     all_flows = []
     today = pd.Timestamp.today().normalize()
+    
+    # Добавляем начальный Cash outflow (инвестиции) в год 0
+    # INVESTED Already includes dirty price (with NKD), so showing it as outflow at year 0
+    total_invested = pd.to_numeric(portfolio['INVESTED'], errors='coerce').sum()
+    if total_invested > 0:
+        all_flows.append({'YEAR': today.year, 'TYPE': 'INVESTED', 'NET': -total_invested})
+    
     for _, bond in portfolio.iterrows():
         face = pd.to_numeric(bond['FACEVALUE'], errors='coerce')
         qty = pd.to_numeric(bond['QUANTITY'], errors='coerce')

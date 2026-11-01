@@ -118,35 +118,48 @@ with st.sidebar:
     st.divider()
     st.subheader("Данные MOEX")
 
-    fetch_smartlab = st.checkbox(
-        "🔍 Парсить рейтинги со smart-lab.ru",
-        value=False,
-        help=(
-            "Вместо заглушки BBB для корпоративных бумаг: парсит реальные рейтинги "
-            "(АКРА, Эксперт РА, НКР, НРА). Запросы идут с паузой ~2 сек. "
-            "Результат кэшируется в data/rating_cache.json."
-        ),
-    )
-
     if st.button(
         "🌐 Обновить котировки с MOEX",
         help=(
             "Доски TQCB + TQOB, рубли. Перезаписывает data/bonds_current.csv "
-            "(резерв .csv.bak). Рейтинг: ОФЗ→AAA, корп →" + ("smart-lab.ru (если включено)" if fetch_smartlab else "BBB (заглушка)") + "."
+            "(резерв .csv.bak). Рейтинг: ОФЗ→AAA, корп →BBB (заглушка). "
+            "Реальные рейтинги загружаются отдельно кнопкой ниже."
         ),
         use_container_width=True,
     ):
         try:
             from src.moex_bonds_update import save_moex_bonds_csv
 
-            with st.spinner(f"Загрузка с MOEX… {'+ парсинг smart-lab.ru' if fetch_smartlab else ''} обычно 30–90 с"):
-                save_moex_bonds_csv(fetch_ratings=fetch_smartlab, ratings_pause=2.0)
+            with st.spinner("Загрузка с MOEX… обычно 30–90 с"):
+                save_moex_bonds_csv(fetch_ratings=False)
             get_bonds_base.clear()
             cached_moex_amortizing_isins.clear()
             st.session_state["moex_refresh_ok"] = True
             st.rerun()
         except Exception as e:
             st.sidebar.error(f"MOEX: {e}")
+
+    if st.button(
+        "⭐ Обогатить рейтинги (smart-lab.ru)",
+        help=(
+            "Разовый парсинг реальных кредитных рейтингов со smart-lab.ru для корпоративных бумаг "
+            "(вместо заглушки BBB). Результат кэшируется в data/rating_cache.json. "
+            "Запросы идут последовательно с retry — это может занять 30–60 мин."
+        ),
+        use_container_width=True,
+    ):
+        import time as _time
+        from src.moex_bonds_update import _apply_smartlab_ratings
+        from src.core import load_bonds_data
+
+        with st.spinner("⏳ Парсинг smart-lab.ru… это может занять 30–60 мин. Результаты сохраняются в кэш."):
+            df_current = load_bonds_data()
+            df_enriched = _apply_smartlab_ratings(df_current, pause_sec=2.0)
+            # Пересохраняем CSV с обогащёнными рейтингами
+            df_enriched.to_csv("data/bonds_current.csv", index=False, encoding="utf-8-sig")
+        get_bonds_base.clear()
+        st.session_state["moex_refresh_ok"] = True
+        st.rerun()
 
     budget = st.number_input("💰 Бюджет (₽)", min_value=10000, value=500000, step=50000)
     
@@ -367,6 +380,7 @@ with tab3:
         buy_list = portfolio[portfolio['QUANTITY'] > 0].copy()
         
         # Анализ долей относительно ВСЕГО портфеля
+        m = calculate_metrics(portfolio)
         journal_df = load_journal()
         existing_val = sum(journal_df['INVESTED']) if not journal_df.empty else 0
         total_portfolio_val = existing_val + m['Cost']

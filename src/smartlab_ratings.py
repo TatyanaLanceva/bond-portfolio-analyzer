@@ -88,111 +88,70 @@ USER_AGENTS = (
 # ---------------------------------------------------------------------------
 def get_bond_rating(
     isin: str,
-    timeout: float = 20.0,
+    timeout: float = 15.0,
     session: requests.Session | None = None,
+    max_retries: int = 3,
 ) -> tuple[str, str]:
     """
     Получает рейтинг облигации со smart-lab.ru по её ISIN.
-
-    Returns
-    -------
-    (rating: str, color_or_width: str)
-        rating — текстовый код рейтинга (AAA, AA+, …) или "Нет данных".
-        color_or_width — сырое значение ширины прогресс-бара (например "width: 90%;")
-                         или сообщение об ошибке.
+    Использует requests + html.parser (как в проверенном рабочем примере).
     """
-    import random
+    import time as _time
     url = f"https://smart-lab.ru/q/bonds/{isin}/"
-    headers = {"User-Agent": random.choice(USER_AGENTS)}
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                      '(KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
     sess = session or requests.Session()
 
-    try:
-        resp = sess.get(url, headers=headers, timeout=timeout)
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        logger.warning("HTTP-ошибка для ISIN %s: %s", isin, e)
-        return "Нет данных", f"Ошибка HTTP: {e}"
+    last_error = ""
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = sess.get(url, headers=headers, timeout=timeout)
+            resp.raise_for_status()
+            # Успех
+            break
+        except Exception as e:
+            last_error = str(e)
+            status_code = getattr(e, 'response', None) and e.response.status_code or 0
+            if attempt < max_retries and status_code in (502, 503, 504, 0):
+                _time.sleep(2 ** attempt)
+                continue
+            logger.warning("ISIN %s — ошибка: %s", isin, last_error)
+            return "Нет данных", f"Ошибка: {last_error}"
 
-    soup = BeautifulSoup(resp.text, "lxml")
+    soup = BeautifulSoup(resp.text, 'html.parser')
 
-    # --- Шаг 1: ищем блок/секцию, содержащую слово "рейтинг" ---
-    rating_section = soup.find(
-        lambda tag: (
-            tag.name in ("div", "section", "span", "td", "th")
-            and tag.get("class")
-            and any("rating" in (c or "").lower() for c in tag.get("class", []))
-        )
-    ) or soup.find(string=lambda t: t and "рейтинг" in t.lower())
-
-    if rating_section is None:
+    # Шаг 1: ищем строку "рейтинг"
+    rating_text = soup.find(string=lambda text: text and 'рейтинг' in text.lower())
+    if not rating_text:
         return "Нет данных", "Блок рейтинга не найден"
 
-    # Если нашли текстовый узел — поднимаемся к родительскому элементу
-    if isinstance(rating_section, str):
-        parent = soup.find_all(string=re.compile("рейтинг", re.IGNORECASE))
-        if not parent:
-            return "Нет данных", "Нет строки с 'рейтинг'"
-        rating_section = parent[0].parent if parent[0].parent else soup
+    # Шаг 2: поднимаемся к родительскому div
+    rating_parent = rating_text.find_parent('div')
+    if not rating_parent:
+        return "Нет данных", "Родительский div не найден"
 
-    # --- Шаг 2: ищем прогресс-бар внутри блока ---
-    progress_bar = None
-    for cls in PROGRESS_BAR_CLASSES:
-        progress_bar = rating_section.find("div", class_=cls)
-        if progress_bar:
-            break
-
-    # Если не нашли внутри — ищем по всей странице
-    if progress_bar is None:
-        for cls in PROGRESS_BAR_CLASSES:
-            progress_bar = soup.find("div", class_=cls)
-            if progress_bar:
-                break
-
-    if progress_bar is None:
+    # Шаг 3: ищем прогресс-бар внутри родителя или рядом
+    progress_bar = rating_parent.find('div', class_='linear-progress-bar')
+    if not progress_bar:
+        progress_bar = rating_parent.find_next('div', class_='linear-progress-bar')
+    if not progress_bar:
         return "Нет данных", "Прогресс-бар не найден"
 
-    # --- Шаг 3: извлекаем ширину (дочерний div с классом или inline style) ---
-    filled = progress_bar.find(
-        lambda t: t.name == "div" and t.get("class") and any(
-            "fill" in (c or "").lower() or "value" in (c or "").lower()
-            for c in t.get("class", [])
-        )
-    )
+    # Шаг 4: ищем filled (класс linear-progress-bar__filed — с опечаткой, как на smart-lab)
+    rating_filled = progress_bar.find('div', class_='linear-progress-bar__filed')
+    if not rating_filled:
+        return "Нет данных", "Filled не найден"
 
-    style = filled.get("style", "") if filled else progress_bar.get("style", "")
-    width_text = ""
-    # style = "width: 90%; background: ..."
-    m = re.search(r"width\s*:\s*([\d.]+)\s*%", style)
-    if m:
-        width_pct = float(m.group(1))
-        rating = _width_to_rating(width_pct)
-        width_text = f"width: {width_pct:.0f}%;"
-        return rating, width_text
-
-    # Если ширина в числовом значении атрибута (например data-width="90")
-    for attr in ("data-width", "data-value", "data-percent", "aria-valuenow"):
-        val = (filled or progress_bar).get(attr)
-        if val is not None:
-            try:
-                width_pct = float(val)
-                rating = _width_to_rating(width_pct)
-                width_text = f"width: {width_pct:.0f}%;"
-                return rating, width_text
-            except (ValueError, TypeError):
-                continue
-
-    # Последняя попытка — текст внутри filled
-    if filled:
-        text_val = filled.get_text(strip=True)
-        if text_val:
-            m2 = re.search(r"(\d+)", text_val)
-            if m2:
-                width_pct = float(m2.group(1))
-                rating = _width_to_rating(width_pct)
-                width_text = f"width: {width_pct:.0f}%;"
-                return rating, width_text
-
-    return "Нет данных", "Ширина не распознана"
+    # Шаг 5: извлекаем рейтинг и цвет
+    color = rating_filled.get('style', '')
+    rating_value = rating_filled.get_text(strip=True)
+    
+    if not rating_value:
+        return "Нет данных", "Рейтинг пуст"
+    
+    return rating_value, color
 
 
 # ---------------------------------------------------------------------------
