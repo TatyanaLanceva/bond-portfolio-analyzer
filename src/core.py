@@ -5,10 +5,6 @@ src/core.py
 import pandas as pd
 import numpy as np
 from pathlib import Path
-import warnings
-
-warnings.filterwarnings('ignore')
-
 JOURNAL_PATH = "data/portfolio_journal.csv"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -186,8 +182,8 @@ def build_portfolio(df: pd.DataFrame, strategy: str, budget: float,
     # ---------- валидация входных данных ----------
     if budget is None or budget <= 0:
         raise ValueError("бюджет должен быть положительным числом")
-    if not (0.0 < max_pct <= 100.0):
-        raise ValueError("max_pct должен быть в диапазоне (0, 100]")
+    if not (0.0 < max_pct <= 1.0):
+        raise ValueError("max_pct должен быть в диапазоне (0, 1.0] (например, 0.2 = 20%)")
     if max_years is None or max_years <= 0:
         raise ValueError("max_years должен быть положительным числом")
     if min_rating not in ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-",
@@ -233,8 +229,9 @@ def build_portfolio(df: pd.DataFrame, strategy: str, budget: float,
         return False
 
     if strategy == "Ladder":
-        target_per_year = budget / 5.0
-        for year in range(1, 6):
+        n_years = max(1, int(max_years))
+        target_per_year = budget / n_years
+        for year in range(1, n_years + 1):
             bucket = pool[(pool['YEARS_TO_MATURITY'] >= year - 0.5) & (pool['YEARS_TO_MATURITY'] < year + 0.5)]
             if bucket.empty: continue
             # Перебираем несколько бумаг из bucket, а не только первую
@@ -252,7 +249,9 @@ def build_portfolio(df: pd.DataFrame, strategy: str, budget: float,
                         break
             
     elif strategy == "Barbell":
-        for part_pool in [pool[pool['YEARS_TO_MATURITY'] <= 1.5], pool[pool['YEARS_TO_MATURITY'] >= 4.0]]:
+        short_max = max_years * 0.25   # короткая часть: до 25% горизонта
+        long_min = max_years * 0.75    # длинная часть: от 75% горизонта
+        for part_pool in [pool[pool['YEARS_TO_MATURITY'] <= short_max], pool[pool['YEARS_TO_MATURITY'] >= long_min]]:
             if part_pool.empty: continue
             # Пробуем купить несколько бумаг из каждой части.
             # Если одна бумага не подходит по бюджету — пробуем следующую, не пропуская всю часть.
@@ -298,7 +297,7 @@ def calculate_metrics(portfolio: pd.DataFrame) -> dict:
         'Cost': round(total_inv, 2)
     }
 
-def calculate_full_cashflow(portfolio: pd.DataFrame, tax_rate: float = 0.0) -> pd.DataFrame:
+def calculate_full_cashflow(portfolio: pd.DataFrame, tax_rate: float = 0.13) -> pd.DataFrame:
     if portfolio.empty: return pd.DataFrame()
     all_flows = []
     today = pd.Timestamp.today().normalize()

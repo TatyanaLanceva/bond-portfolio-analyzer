@@ -1,4 +1,4 @@
-# 📊 Bond Portfolio Analyzer
+#  Bond Portfolio Analyzer
 
 **Автоматизированный подбор и анализ облигационных портфелей** с ML-прогнозом справедливой доходности и ранжированием выпусков.
 
@@ -6,7 +6,7 @@
 
 ---
 
-## 📋 Содержание
+##  Содержание
 
 - [О проекте](#о-проекте)
 - [Архитектура](#архитектура)
@@ -51,40 +51,40 @@
 
 ```
 bond-portfolio-analyzer/
-├── app.py                       # 📱 Главное приложение Streamlit (UI)
-├── src/
-│   ├── __init__.py              # Пакет
-│   ├── core.py                  # ⚙️ Ядро: загрузка, оптимизация, метрики, журнал
-│   ├── moex_bonds_update.py     # 🌐 Загрузка котировок с MOEX ISS
-│   ├── moex_amort.py            # 🔍 Проверка амортизации через MOEX bondization
-│   ├── smartlab_ratings.py      # ⭐ Парсер кредитных рейтингов со smart-lab.ru
-│   ├── ml_model.py              # 🤖 ML-модель (RandomForest) и ранжирование
-├── data/
-│   ├── bonds_current.csv        # 📄 Актуальный снимок MOEX (генерируется)
-│   ├── bonds_current.csv.bak    # Резервная копия при обновлении
-│   ├── amortizing_cache.json    # Кэш амортизации (MOEX)
-│   ├── rating_cache.json        # Кэш рейтингов (smart-lab.ru)
-│   ├── ml_model.pkl             # Обученная модель RandomForest
-│   ├── ml_scaler.pkl            # StandardScaler для признаков
-│   ├── ml_metrics.json          # Метрики и гиперпараметры модели
-│   └── portfolio_journal.csv    # Журнал сделок пользователя
-├── requirements.txt             # Зависимости Python
-├── .gitignore                   # Исключения Git
-└── README.md                    # Документация
+ app.py                       #  Главное приложение Streamlit (UI)
+ src/
+    __init__.py              # Пакет
+    core.py                  #  Ядро: загрузка, оптимизация, метрики, журнал
+    moex_bonds_update.py     #  Загрузка котировок с MOEX ISS
+    moex_amort.py            #  Проверка амортизации через MOEX bondization
+    smartlab_ratings.py      #  Парсер кредитных рейтингов со smart-lab.ru
+    ml_model.py              #  ML-модель (RandomForest) и ранжирование
+ data/
+    bonds_current.csv        #  Актуальный снимок MOEX (генерируется)
+    bonds_current.csv.bak    # Резервная копия при обновлении
+    amortizing_cache.json    # Кэш амортизации (MOEX)
+    rating_cache.json        # Кэш рейтингов (smart-lab.ru)
+    ml_model.pkl             # Обученная модель RandomForest
+    ml_scaler.pkl            # StandardScaler для признаков
+    ml_metrics.json          # Метрики и гиперпараметры модели
+    portfolio_journal.csv    # Журнал сделок пользователя
+ requirements.txt             # Зависимости Python
+ .gitignore                   # Исключения Git
+ README.md                    # Документация
 ```
 
 ### Поток данных
 
 ```
-MOEX ISS ──► moex_bonds_update.py ──► bonds_current.csv ──► core.py ──► app.py
-                 │                                                     │
-                 ▼                                                     ▼
+MOEX ISS  moex_bonds_update.py  bonds_current.csv  core.py  app.py
+
+
          smartlab_ratings.py                                  build_portfolio()
-                 │                                                     │
-                 ▼                                                     ▼
+
+
          rating_cache.json                                     ML-прогноз (ml_model.py)
-                                                                       │
-                                                                       ▼
+
+
                                                               enrich_with_ml_scores()
 ```
 
@@ -135,7 +135,7 @@ python src/ml_model.py
 
 Котировки можно обновить двумя способами:
 
-1. **Через UI:** на боковой панели нажать «🌐 Обновить котировки с MOEX».
+1. **Через UI:** на боковой панели нажать « Обновить котировки с MOEX».
 2. **Из командной строки:**
    ```bash
    python -c "from src.moex_bonds_update import save_moex_bonds_csv; save_moex_bonds_csv()"
@@ -249,7 +249,7 @@ DIRTY_PRICE_RUB = FACEVALUE × WAPRICE / 100 + ACCRUEDINT
 - **Механизм:** бюджет делится на 5 равных частей, для каждого года выбирается лучшая бумага.
 - **Плюсы:** предсказуемый денежный поток, реинвестирование при погашении каждой ступени.
 
-### 🏋️ Гантеля (Barbell)
+###  Гантеля (Barbell)
 
 Инвестиции только в короткие (до 1.5 лет) и длинные (от 4 лет) бумаги.
 
@@ -257,7 +257,7 @@ DIRTY_PRICE_RUB = FACEVALUE × WAPRICE / 100 + ACCRUEDINT
 - **Механизм:** по 25% бюджета на 2 лучшие короткие + 2 лучшие длинные бумаги.
 - **Плюсы:** «короткий конец» даёт ликвидность, «длинный» — повышенную доходность.
 
-### 🎡 Колесо (Wheel / Max Yield)
+###  Колесо (Wheel / Max Yield)
 
 Жадный алгоритм: покупка самых доходных бумаг в рамках лимитов.
 
@@ -375,7 +375,7 @@ param_grid = {
 
 ### Использование ML в UI
 
-На вкладке «🤖 ML-Прогноз» доступно:
+На вкладке « ML-Прогноз» доступно:
 
 1. **Сравнение стратегий** — взвешенная YTM, доп. доходность и ранг для Ladder, Barbell и Wheel при текущих параметрах
 2. **Детальный разбор портфеля** — для каждой бумаги: прогноз YTM, доп. доходность, группа, ранг и сигнал (выше/ниже/около модели)
@@ -459,8 +459,8 @@ param_grid = {
 
 **Функции:**
 - Загрузка существующих позиций → учёт при расчёте новых портфелей
-- Просмотр истории (вкладка «📜 Журнал»)
-- Очистка журнала (кнопка «🗑️ Очистить журнал сделок»)
+- Просмотр истории (вкладка « Журнал»)
+- Очистка журнала (кнопка « Очистить журнал сделок»)
 - Автоматический пересчёт лимитов: `max_allowed = total_portfolio × max_pct − existing_in_bond`
 
 ---

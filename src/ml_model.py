@@ -55,10 +55,15 @@ def _add_engineered_features(df_m: pd.DataFrame) -> pd.DataFrame:
     """
     out = df_m.copy()
 
-    # IS_GOVERNMENT: ОФЗ — если рейтинг AAA и краткое имя начинается с "ОФЗ"
+    # IS_GOVERNMENT: ОФЗ — по маске ISIN RU000A в combinaison с признаком госбонда
+    # (название начинается с "ОФЗ" или рейтинг AAA). Сама по себе маска RU000A не надёжна,
+    # так как все российские выпуски (в т.ч. корпоративные) имеют ISIN RU000A….
+    isin = out.get('ISIN', pd.Series(dtype=str)).astype(str).str.strip()
+    shortname = out.get('SHORTNAME', pd.Series(dtype=str)).astype(str).str.strip()
+    rating = out.get('RATING', pd.Series(dtype=str)).astype(str).str.strip()
     out['IS_GOVERNMENT'] = (
-        (out.get('RATING', '').astype(str).str.strip() == 'AAA') &
-        (out.get('SHORTNAME', '').astype(str).str.strip().str.upper().str.startswith('ОФЗ'))
+        isin.str.startswith('RU000A') &
+        (shortname.str.upper().str.startswith('ОФЗ') | (rating == 'AAA'))
     ).astype(int)
 
     # MOD_DURATION: приближённая модифицированная дюрация
@@ -67,16 +72,24 @@ def _add_engineered_features(df_m: pd.DataFrame) -> pd.DataFrame:
     out['MOD_DURATION'] = yrs / (1.0 + ytm / 100.0)
     out['MOD_DURATION'] = out['MOD_DURATION'].replace([np.inf, -np.inf], 0).fillna(0)
 
-    # COUPONS_REMAINING: число оставшихся полугодовых купонных выплат
-    # Если известна MATDATE — считаем точное число периодов до даты погашения.
-    # Если MATDATE нет — используем приближение: 2 * YEARS_TO_MATURITY.
+    # COUPONS_REMAINING: число оставшихся купонных выплат до погашения
+    # Используем реальную частоту купонов (COUPONPERIOD в месяцах), если доступна.
+    # По умолчанию — полугодовые купоны (период 6 месяцев).
     cpn = pd.to_numeric(out.get('COUPONPERCENT', 0), errors='coerce').fillna(0)
     matdate = pd.to_datetime(out.get('MATDATE'), errors='coerce')
     today = pd.Timestamp.today().normalize()
+
+    # Периодичность купонов в месяцах (по умолчанию 6 = полугодовые)
+    if 'COUPONPERIOD' in out.columns:
+        coupon_period_months = pd.to_numeric(out['COUPONPERIOD'], errors='coerce').fillna(6)
+    else:
+        coupon_period_months = pd.Series([6] * len(out), index=out.index)
+
+    days_in_period = coupon_period_months * 30.44  # среднее число дней в месяце
+
     if matdate.notna().any():
-        # Точное число полугодовых периодов от сегодня до даты погашения
         days_remaining = (matdate - today).dt.days.clip(lower=0)
-        exact_periods = np.ceil(days_remaining / 182.625).astype(int)  # 182.625 ≈ полугодие
+        exact_periods = np.ceil(days_remaining / days_in_period).astype(int)
         out['COUPONS_REMAINING'] = np.where(
             cpn > 0,
             exact_periods,
@@ -84,9 +97,10 @@ def _add_engineered_features(df_m: pd.DataFrame) -> pd.DataFrame:
         )
     else:
         # Приближение, если MATDATE недоступна
+        periods_per_year = 12.0 / coupon_period_months
         out['COUPONS_REMAINING'] = np.where(
             cpn > 0,
-            np.ceil(yrs * 2.0).astype(int),
+            np.ceil(yrs * periods_per_year).astype(int),
             0
         )
     return out
