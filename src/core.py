@@ -2,6 +2,7 @@
 src/core.py
 Ядро системы: загрузка данных, оптимизация портфеля, метрики и журнал.
 """
+import warnings
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -32,12 +33,23 @@ def load_bonds_data(file_path: str = "data/bonds_current.csv") -> pd.DataFrame:
         
     df['COUPONPERCENT'] = df['COUPONPERCENT'].fillna(0.0)
     missing_fv = df['FACEVALUE'].isna().sum()
+    # Номинал российских облигаций стандартен — 1000 ₽.
+    # Если в CSV другой номинал или он absent — помечаемsource.
+    df['FACEVALUE_SOURCE'] = 'unknown'
     df['FACEVALUE'] = df['FACEVALUE'].fillna(1000.0)
-    if missing_fv > 0:
+    std_nominal = 1000.0
+    is_default = df['FACEVALUE'] == std_nominal
+    df.loc[is_default, 'FACEVALUE_SOURCE'] = 'default (assumed 1000 for RUB bonds)'
+    # Если номинал явно нестандартный (не 1000), оставляем его, но ставим предупреждение
+    non_standard = (~is_default) & (df['FACEVALUE'] != std_nominal)
+    if non_standard.sum() > 0:
         warnings.warn(
-            f"{missing_fv} выпусков имеют отсутствующий номинал (FACEVALUE). "
-            f"Используется значение по умолчанию 1000 ₽ — проверьте точность расчётов."
+            f"{non_standard.sum()} выпусков имеют нестандартный номинал (FACEVALUE ≠ 1000 ₽). "
+            f"Возможно, номинал отличается (амортизируемые, серии иным номиналом). "
+            f"При расчёте цен (DIRTY_PRICE_RUB) используется введенное значение. "
+            f"Для точности можно запросить номинал с MOEX ISS."
         )
+    df['FACEVALUE_SOURCE'] = df['FACEVALUE_SOURCE'].where(~non_standard, 'non_standard_csv')
     
     # Фильтрация
     df = df[df['ISIN'].astype(str).str.startswith('RU')]
