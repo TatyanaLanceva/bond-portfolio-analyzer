@@ -11,11 +11,14 @@ from __future__ import annotations
 import concurrent.futures
 import hashlib
 import json
+import logging
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Callable, Iterable
+
+logger = logging.getLogger(__name__)
 
 
 BONDIZATION_URL = (
@@ -135,8 +138,10 @@ def moex_amortizing_isins(
                 result = future.result()
                 if result:
                     out.add(result)
-            except Exception:
-                pass  # Ошибка сети — бумага считается неамортизируемой
+            except Exception as exc:
+                # Ошибка сети при проверке одного ISIN — логируем, но не прерываем весь процесс.
+                # Бумага считается неамортизируемой (консервативный подход: не исключаем из портфеля).
+                logger.warning("Ошибка проверки амортизации для %s: %s", isin, exc)
             if progress_callback:
                 progress_callback(completed, total, isin)
 

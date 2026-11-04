@@ -35,7 +35,13 @@ def load_bonds_data(file_path: str = "data/bonds_current.csv") -> pd.DataFrame:
         df[col] = pd.to_numeric(df[col], errors='coerce')
         
     df['COUPONPERCENT'] = df['COUPONPERCENT'].fillna(0.0)
+    missing_fv = df['FACEVALUE'].isna().sum()
     df['FACEVALUE'] = df['FACEVALUE'].fillna(1000.0)
+    if missing_fv > 0:
+        warnings.warn(
+            f"{missing_fv} выпусков имеют отсутствующий номинал (FACEVALUE). "
+            f"Используется значение по умолчанию 1000 ₽ — проверьте точность расчётов."
+        )
     
     # Фильтрация
     df = df[df['ISIN'].astype(str).str.startswith('RU')]
@@ -177,6 +183,18 @@ def build_portfolio(df: pd.DataFrame, strategy: str, budget: float,
                     min_rating: str, max_years: float, max_pct: float,
                     existing_holdings: dict = None, total_portfolio_value: float = None,
                     min_target_yield: float = 0.0) -> pd.DataFrame:
+    # ---------- валидация входных данных ----------
+    if budget is None or budget <= 0:
+        raise ValueError("бюджет должен быть положительным числом")
+    if not (0.0 < max_pct <= 100.0):
+        raise ValueError("max_pct должен быть в диапазоне (0, 100]")
+    if max_years is None or max_years <= 0:
+        raise ValueError("max_years должен быть положительным числом")
+    if min_rating not in ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-",
+                          "BBB+", "BBB", "BBB-", "BB+", "BB", "BB-",
+                          "B+", "B", "B-", "CCC"]:
+        raise ValueError(f"неизвестный минимальный рейтинг: {min_rating}")
+
     if existing_holdings is None: existing_holdings = {}
     if total_portfolio_value is None: total_portfolio_value = budget
 
@@ -236,9 +254,13 @@ def build_portfolio(df: pd.DataFrame, strategy: str, budget: float,
     elif strategy == "Barbell":
         for part_pool in [pool[pool['YEARS_TO_MATURITY'] <= 1.5], pool[pool['YEARS_TO_MATURITY'] >= 4.0]]:
             if part_pool.empty: continue
-            # Пробуем купить несколько бумаг из каждой части, а не только 2
+            # Пробуем купить несколько бумаг из каждой части.
+            # Если одна бумага не подходит по бюджету — пробуем следующую, не пропуская всю часть.
             for _, bond in part_pool.iterrows():
-                if not try_buy(bond, budget * 0.25): continue
+                if bond['ISIN'] in bought_isins:
+                    continue
+                if try_buy(bond, budget * 0.25):
+                    break  # достаточно одной бумаги из каждой части, переходим к следующей части
     else:  # Wheel
         for _, bond in pool.head(8).iterrows():
             if not try_buy(bond, budget / 6.0): break
