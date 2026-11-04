@@ -1,0 +1,27 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: bond-portfolio-ingress
+  namespace: bond-portfolio
+  annotations:
+    # Для локального тестирования (minikube) можно использовать nginx ingress controller
+    # Для облачных провайдеров — раскомментировать соответствующую аннотацию
+    # yandex.cloud/load-balancer-type: "alb"
+    spec.ingressClassName: nginx
+spec:
+  rules:
+    - host: bond-portfolio.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: bond-portfolio-service
+                port:
+                  number: 80
+  # Для production-среды добавить tls секцию:
+  # tls:
+  #   - hosts:
+  #       - bond-portfolio.local
+  #     secretName: bond-portfolio-tls

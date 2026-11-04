@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bond-portfolio-analyzer
+  namespace: bond-portfolio
+  labels:
+    app: bond-portfolio-analyzer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bond-portfolio-analyzer
+  template:
+    metadata:
+      labels:
+        app: bond-portfolio-analyzer
+    spec:
+      initContainers:
+        - name: clone-repo
+          image: alpine/git:latest
+          command:
+            - sh
+            - -c
+            - |
+              rm -rf /app/*
+              git clone https://github.com/TatyanaLanceva/bond-portfolio-analyzer.git /app
+          volumeMounts:
+            - name: app-code
+              mountPath: /app
+        - name: install-deps
+          image: python:3.10-slim
+          command:
+            - sh
+            - -c
+            - |
+              pip install --no-cache-dir --target=/app/deps -r /app/requirements.txt
+          volumeMounts:
+            - name: app-code
+              mountPath: /app
+      containers:
+        - name: bond-portfolio-analyzer
+          image: python:3.10-slim
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - |
+              export PATH="/app/deps/bin:$PATH"
+              export PYTHONPATH="/app/deps:$PYTHONPATH"
+              python -m streamlit run /app/app.py --server.address=0.0.0.0
+          env:
+            - name: PYTHONPATH
+              value: /app/deps
+            - name: PATH
+              value: /app/deps/bin:/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          envFrom:
+            - configMapRef:
+                name: bond-portfolio-config
+          ports:
+            - containerPort: 8501
+              protocol: TCP
+          volumeMounts:
+            - name: app-code
+              mountPath: /app
+            - name: data-volume
+              mountPath: /app/data
+          livenessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "2.0"
+      volumes:
+        - name: app-code
+          emptyDir: {}
+        - name: data-volume
+          persistentVolumeClaim:
+            claimName: bond-portfolio-data

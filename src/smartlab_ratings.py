@@ -203,6 +203,7 @@ def enrich_csv_with_ratings(
     use_cache: bool = True,
     cache_path: str | Path = "data/rating_cache.json",
     progress_callback: Callable[[int, int, str], None] | None = None,
+    limit: int | None = None,
 ) -> tuple[int, int]:
     """
     Читает CSV (разделитель `;`), добавляет колонки Рейтинг и Цвет рейтинга,
@@ -233,9 +234,12 @@ def enrich_csv_with_ratings(
     session = requests.Session()
 
     with open(inp, encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f, delimiter=";")
+        reader = csv.DictReader(f, delimiter=",")
         rows = list(reader)
         fieldnames = reader.fieldnames or []
+
+    if limit is not None:
+        rows = rows[:limit]
 
     total = len(rows)
     logger.info("Начинаем обработку %d записей из %s", total, inp)
@@ -248,7 +252,7 @@ def enrich_csv_with_ratings(
 
     processed = 0
     with open(output_csv, "w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=";")
+        writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=",")
         writer.writeheader()
 
         for i, row in enumerate(rows, 1):

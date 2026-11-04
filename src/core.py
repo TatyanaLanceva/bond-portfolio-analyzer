@@ -5,21 +5,28 @@ src/core.py
 import pandas as pd
 import numpy as np
 from pathlib import Path
-import warnings
 
-warnings.filterwarnings('ignore')
+# Базовый путь к данным относительно расположения модуля
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = PROJECT_ROOT / "data"
 
-JOURNAL_PATH = "data/portfolio_journal.csv"
+JOURNAL_PATH = str(DATA_DIR / "portfolio_journal.csv")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. ЗАГРУЗКА ДАННЫХ
 # ─────────────────────────────────────────────────────────────────────────────
-def load_bonds_data(file_path: str = "data/bonds_current.csv") -> pd.DataFrame:
+def load_bonds_data(file_path: str = str(DATA_DIR / "bonds_current.csv")) -> pd.DataFrame:
     """Загружает CSV и подготавливает данные."""
-    if not Path(file_path).exists():
-        raise FileNotFoundError(f"Файл {file_path} не найден. Положите bonds_current.csv в папку data/")
+    try:
+        if not Path(file_path).exists():
+            raise FileNotFoundError(f"Файл {file_path} не найден. Положите bonds_current.csv в папку data/")
+        
+        df = pd.read_csv(file_path, encoding="utf-8-sig")
+    except FileNotFoundError:
+        raise
+    except Exception as e:
+        raise ValueError(f"Ошибка чтения CSV файла {file_path}: {e}") from e
     
-    df = pd.read_csv(file_path)
     # Очистка имён колонок от пробелов
     df.columns = [c.strip().upper() for c in df.columns]
 
@@ -39,7 +46,7 @@ def load_bonds_data(file_path: str = "data/bonds_current.csv") -> pd.DataFrame:
     
     # Фильтрация
     df = df[df['ISIN'].astype(str).str.startswith('RU')]
-    df = df[(df['DIRTY_PRICE_RUB'] > 0) & (df['YTM_PCT'] >= 0) & (df['YEARS_TO_MATURITY'] > 0)]
+    df = df[(df['DIRTY_PRICE_RUB'] > 0) & (df['YTM_PCT'] >= 0) & (df['YTM_PCT'] <= 50) & (df['YEARS_TO_MATURITY'] > 0)]
     df = df.dropna(subset=['MATDATE'])
     df['MATDATE'] = pd.to_datetime(df['MATDATE'], errors='coerce').dt.normalize()
 
@@ -243,12 +250,11 @@ def build_portfolio(df: pd.DataFrame, strategy: str, budget: float,
         for _, bond in pool.head(8).iterrows():
             if not try_buy(bond, budget / 6.0): break
 
-    # Добиваем остаток
-    if remaining_budget > budget * 0.1:
-        for _, bond in pool.iterrows():
-            if bond['ISIN'] not in bought_isins:
-                if remaining_budget > bond['DIRTY_PRICE_RUB']:
-                    try_buy(bond)
+    # Добиваем остаток (без минимального порога)
+    for _, bond in pool.iterrows():
+        if bond['ISIN'] not in bought_isins:
+            if remaining_budget > bond['DIRTY_PRICE_RUB']:
+                try_buy(bond)
 
     return pd.DataFrame(portfolio) if portfolio else pd.DataFrame()
 

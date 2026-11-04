@@ -32,4 +32,9 @@ results_*/
 Thumbs.db
 
 # Jupyter
-.ipynb_checkpoints*.local
+.ipynb_checkpoints/
+
+# Duplicate project folder
+bond-portfolio-analyzer/
+
+*.local

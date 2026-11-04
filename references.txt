@@ -1,0 +1,19 @@
+1. Московская биржа. Информационно-статистический сервер (ISS). 2025. URL: https://iss.moex.com/
+2. Московская биржа. Спецификация инструментов фондового рынка (доски TQCB, TQOB). URL: https://www.moex.com/ru/stock-services/specifications/
+3. Московская биржа. Статистика рынка облигаций (bondization). URL: https://iss.moex.com/iss/statistics/engines/stock/markets/bonds/bondization/
+4. Pedregosa F. et al. Scikit-learn: Machine Learning in Python // Journal of Machine Learning Research. 2011. Vol. 12. P. 2825–2830.
+5. McKinney W. Python for Data Analysis. 3rd ed. O'Reilly Media, 2022.
+6. Streamlit Inc. Streamlit Documentation. 2025. URL: https://docs.streamlit.io/
+7. The pandas development team. pandas documentation. 2025. URL: https://pandas.pydata.org/docs/
+8. Plotly Technologies Inc. Plotly Python Graphing Library. 2025. URL: https://plotly.com/python/
+9. Breiman L. Random Forests // Machine Learning. 2001. Vol. 45, No. 1. P. 5–32.
+10. Friedman J.H. Greedy Function Approximation: A Gradient Boosting Machine // Annals of Statistics. 2001. Vol. 29, No. 5. P. 1189–1232.
+11. Bodie Z., Kane A., Marcus A.J. Investments. 12th ed. McGraw-Hill Education, 2021.
+12. Fabozzi F.J. Bond Markets, Analysis, and Strategies. 10th ed. Pearson, 2021.
+13. Tuckman B., Serrat A. Fixed Income Securities: Tools for Today's Markets. 4th ed. Wiley, 2022.
+14. Choudhry M. An Introduction to Bond Markets. 5th ed. Wiley, 2022.
+15. Dixon M.F., Halperin I., Bilokon P. Machine Learning in Finance: From Theory to Practice. Springer, 2020.
+16. The Kubernetes Authors. Kubernetes Documentation. 2025. URL: https://kubernetes.io/docs/
+17. Docker Inc. Docker Documentation. 2025. URL: https://docs.docker.com/
+18. Richardson L. Beautiful Soup Documentation. 2025. URL: https://www.crummy.com/software/BeautifulSoup/bs4/doc/
+19. Van Rossum G., Drake F.L. Python 3 Reference Manual. CreateSpace, 2009.

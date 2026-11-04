@@ -58,9 +58,9 @@ def cached_moex_amortizing_isins(isins_key: tuple) -> frozenset:
     return frozenset(moex_amortizing_isins(list(isins_key)))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------------
 # 🎨 Настройка страницы и CSS
-# ─────────────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------------
 st.set_page_config(
     page_title="Анализатор портфеля v2.0",
     page_icon="📊",
@@ -91,18 +91,18 @@ st.caption("📊 Bond Portfolio Analyzer — автоматизированны�
 if st.session_state.pop("moex_refresh_ok", False):
     st.success("Котировки обновлены с MOEX → `data/bonds_current.csv` (резервная копия: `.csv.bak`).")
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------------
 # 📥 Загрузка данных (сырой CSV + опциональное исключение амортизируемых)
-# ─────────────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------------
 try:
     _bonds_base = get_bonds_base()
 except Exception as e:
     st.error(f"❌ Ошибка загрузки: {e}")
     st.stop()
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------------
 # ⚙️ Боковая панель (Настройки)
-# ─────────────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------------
 with st.sidebar:
     st.header("⚙️ Параметры расчета")
 
@@ -142,27 +142,29 @@ with st.sidebar:
     if st.button(
         "⭐ Обогатить рейтинги (smart-lab.ru)",
         help=(
-            "Разовый парсинг реальных кредитных рейтингов со smart-lab.ru для корпоративных бумаг "
+"Разовый парсинг реальных кредитных рейтингов со smart-lab.ru для корпоративных бумаг "
             "(вместо заглушки BBB). Результат кэшируется в data/rating_cache.json. "
             "Запросы идут последовательно с retry — это может занять 30–60 мин."
         ),
         use_container_width=True,
     ):
-        import time as _time
-        from src.moex_bonds_update import _apply_smartlab_ratings
-        from src.core import load_bonds_data
-
-        with st.spinner("⏳ Парсинг smart-lab.ru… это может занять 30–60 мин. Результаты сохраняются в кэш."):
-            df_current = load_bonds_data()
-            df_enriched = _apply_smartlab_ratings(df_current, pause_sec=2.0)
-            # Пересохраняем CSV с обогащёнными рейтингами
-            df_enriched.to_csv("data/bonds_current.csv", index=False, encoding="utf-8-sig")
+        import sys as _sys
+        import subprocess
+        # Запускаем enrich_ratings скрипт в отдельном процессе
+        with st.spinner("⏳ Парсинг smart-lab.ru… новеллы сохраняются в кэш. Это может занять время."):
+            result = subprocess.run(
+                [_sys.executable, "enrich_ratings.py", "--pause", "2.0"],
+                capture_output=True, text=True, timeout=7200
+            )
+            if result.returncode != 0:
+                st.error(f"Ошибка: {result.stderr[:500]}")
+            else:
+                st.info(result.stdout[-1000:] if len(result.stdout) > 1000 else result.stdout)
         get_bonds_base.clear()
         st.session_state["moex_refresh_ok"] = True
         st.rerun()
-
-    budget = st.number_input("💰 Бюджет (₽)", min_value=10000, value=500000, step=50000)
     
+    budget = st.number_input("💰 Бюджет (₽)", min_value=0, value=500000, step=50000)
     tax_rate = st.selectbox(
         "🏛️ Налоговый режим",
         options=[("0% (ИИС / Льгота)", 0.0), ("13% (НДФЛ)", 0.13)],
@@ -177,7 +179,7 @@ with st.sidebar:
         max_value=30.0,
         value=12.0,
         step=0.5,
-        help="В пул для подбора попадают только облигации с YTM ≥ этого значения. 0 — без ограничения по доходности.",
+        help="В пул для подбора попадают только облигации с YTM >= этого значения. 0 — без ограничения по доходности.",
     )
 
     min_rating = st.selectbox("🛡️ Мин. рейтинг", 
@@ -192,7 +194,6 @@ with st.sidebar:
         format_func=lambda x: {"Ladder": "🪜 Лестница", "Barbell": "🏋️ Гантеля", "Wheel": "🎡 Колесо"}[x]
     )
 
-    # Пояснения к стратегиям
     with st.expander("ℹ️ Описание стратегий"):
         st.markdown("""
         **🪜 Лестница (Ladder)**  
@@ -214,6 +215,11 @@ with st.sidebar:
     st.divider()
     if st.button("🗑️ Очистить журнал сделок", type="secondary", use_container_width=True):
         clear_journal()
+        st.rerun()
+    
+    if st.button("🔄 Начать заново (сбросить портфель)", type="secondary", use_container_width=True):
+        st.session_state.portfolio_cache = {}
+        st.session_state.last_params = None
         st.rerun()
 
 _amort_isins = None
@@ -239,17 +245,17 @@ if exclude_amortizing and len(df_raw) < len(_bonds_base):
         f"Кэш MOEX обновляется не чаще раза в сутки."
     )
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------------
 # 🧠 Инициализация состояния сессии
-# ─────────────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------------
 if "portfolio_cache" not in st.session_state:
     st.session_state.portfolio_cache = {}
 if "last_params" not in st.session_state:
     st.session_state.last_params = None
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------------
 # 🚀 Логика оптимизации
-# ─────────────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------------
 current_params = (
     budget, target_yield, min_rating, max_years, max_pct, strategy, tax_rate, exclude_amortizing,
 )
@@ -281,9 +287,9 @@ if run_opt or st.session_state.last_params != current_params:
 
 portfolio = st.session_state.portfolio_cache.get('current', pd.DataFrame())
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------------
 # 📑 Вкладки
-# ─────────────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------------
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📊 Портфель", "💰 Поток", "🛒 Покупки", "📜 Журнал", "🤖 ML-Прогноз"
 ])
@@ -291,35 +297,38 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 # ▼ Вкладка 1: Портфель
 with tab1:
     st.subheader("📊 Результаты оптимизации")
+    col_reset, _ = st.columns([1, 5])
+    with col_reset:
+        if st.button("🔄 Сбросить портфель и начать заново", type="secondary", use_container_width=True):
+            st.session_state.portfolio_cache = {}
+            st.session_state.last_params = None
+            st.rerun()
     if portfolio.empty:
         st.info("Нажмите «Рассчитать портфель» в меню слева.")
     else:
         m = calculate_metrics(portfolio)
-        # Учитываем налог в метриках для отображения
         net_yield = m['Yield_Pct'] * (1 - tax_rate) if tax_rate > 0 else m['Yield_Pct']
         
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("📦 Бумаг", m['Count'])
-        c2.metric("💵 Вложено", f"{m['Cost']:,.0f} ₽")
+        c2.metric("💵 Вложено", f"{m['Cost']:.0f} ₽")
         c3.metric(f"📈 Доходность ({'ИИС' if tax_rate==0 else 'НДФЛ'})", f"{net_yield:.2f}%")
-        c4.metric("🎁 Купон (Чистыми)", f"{m['Coupon_Yearly'] * (1-tax_rate):,.0f} ₽")
+        c4.metric("🎁 Купон (Чистыми)", f"{m['Coupon_Yearly'] * (1-tax_rate):.0f} ₽")
 
-        # Таблица с красивым форматированием
         st.dataframe(
             ru(portfolio_table_view(portfolio)).style.format({
                 'Доходность (YTM, %)': '{:.2f}%',
                 'Лет до погашения': '{:.2f}',
-                'Цена с НКД (₽)': '{:,.2f}',
+                'Цена с НКД (₽)': '{:.2f}',
                 'Купон (%)': '{:.2f}',
-                'Номинал (₽)': '{:,.0f}',
+                'Номинал (₽)': '{:.0f}',
                 'Риск (код рейтинга)': '{:.0f}',
                 'Количество': '{:.0f}',
-                'Инвестировано (₽)': '{:,.2f}',
+                'Инвестировано (₽)': '{:.2f}',
             }).highlight_max(subset=['Доходность (YTM, %)'], color='#caeddb'),
             use_container_width=True, height=450
         )
         
-        # График портфеля
         fig = px.scatter(
             portfolio, x='YEARS_TO_MATURITY', y='YTM_PCT', size='INVESTED', color='RATING',
             hover_name='SHORTNAME', title="Доходность vs Срок"
@@ -341,11 +350,9 @@ with tab2:
             4. **Накопленный доход**: Сумма всех поступлений по годам.
             """)
 
-        # Расчет с учетом выбранного налога
         cf = calculate_full_cashflow(portfolio, tax_rate=tax_rate)
         
         if not cf.empty:
-            # График: Stack Bar (Купоны + Погашение)
             fig_cf = go.Figure()
             fig_cf.add_trace(go.Bar(name='Купоны (Net)', x=cf['YEAR'], y=cf['COUPON'], marker_color='#caeddb'))
             fig_cf.add_trace(go.Bar(name='Погашение номинала', x=cf['YEAR'], y=cf['PRINCIPAL'], marker_color='#00382b'))
@@ -385,16 +392,16 @@ with tab3:
         existing_val = sum(journal_df['INVESTED']) if not journal_df.empty else 0
         total_portfolio_val = existing_val + m['Cost']
         
-        st.info(f"📈 Общая стоимость портфеля: **{total_portfolio_val:,.0f} ₽** (Учитывая старые сделки)")
+        st.info(f"📈 Общая стоимость портфеля: **{total_portfolio_val:.0f} ₽** (Учитывая старые сделки)")
         
         st.dataframe(
             ru(portfolio_table_view(buy_list)).style.format({
-                'Цена с НКД (₽)': '{:,.2f}',
+                'Цена с НКД (₽)': '{:.2f}',
                 'Купон (%)': '{:.2f}',
                 'Доходность (YTM, %)': '{:.2f}%',
-                'Номинал (₽)': '{:,.0f}',
+                'Номинал (₽)': '{:.0f}',
                 'Количество': '{:.0f}',
-                'Инвестировано (₽)': '{:,.2f}',
+                'Инвестировано (₽)': '{:.2f}',
             }),
             use_container_width=True
         )
@@ -403,7 +410,10 @@ with tab3:
         with c1:
             if st.button("✅ Добавить выбранные бумаги в портфель", type="primary", use_container_width=True):
                 save_to_journal(journal_df, buy_list, strategy)
-                st.success("🎉 Сделки сохранены! Обновите портфель.")
+                st.session_state.portfolio_cache = {}
+                st.session_state.last_params = None
+                st.success("🎉 Сделки сохранены! Портфель очищен для нового подбора.")
+                st.rerun()
         
         with c2:
             if st.button("📥 Скачать CSV заявки", use_container_width=True):
@@ -418,7 +428,7 @@ with tab4:
     if j_df.empty:
         st.info("Журнал пуст.")
     else:
-        st.dataframe(ru(j_df).style.format({'Цена покупки (₽)': '{:,.2f}', 'Инвестировано (₽)': '{:,.0f}'}), use_container_width=True, height=400)
+        st.dataframe(ru(j_df).style.format({'Цена покупки (₽)': '{:.2f}', 'Инвестировано (₽)': '{:.0f}'}), use_container_width=True, height=400)
 
 # ▼ Вкладка 5: ML
 with tab5:
@@ -474,9 +484,9 @@ with tab5:
         3. **Приведение типов:** числовые поля конвертируются через `pd.to_numeric`; пропуски
            заполняются (`COUPONPERCENT → 0`, `FACEVALUE → 1000`).
         4. **Фильтрация по ISIN:** только бумаги с префиксом `RU` (российские эмитенты).
-        5. **Фильтрация по цене и доходности:** `DIRTY_PRICE_RUB > 0`, `YTM_PCT ≥ 0`,
+        5. **Фильтрация по цене и доходности:** `DIRTY_PRICE_RUB > 0`, `YTM_PCT >= 0`,
            `YEARS_TO_MATURITY > 0`.
-        6. **Расчёт признака LASTPRICE:** цена в % от номинала = `DIRTY_PRICE_RUB / FACEVALUE × 100`.
+        6. **Расчёт признака LASTPRICE:** цена в % от номинала = `DIRTY_PRICE_RUB / FACEVALUE * 100`.
         7. **Расчёт RATING_SCORE:** текстовый рейтинг маппится в числовой скор (0 = AAA … 16 = CCC).
         8. **Фильтрация выбросов YTM:** для ML-модели YTM ограничивается диапазоном **0–50%**,
            чтобы аномальные значения (например, 60628%) не искажали обучение.
@@ -501,7 +511,6 @@ with tab5:
             model, scaler, features = load_model()
             st.success("✅ Модель загружена")
 
-            # Статистика по датасету (из bonds_current.csv)
             df_bonds = _bonds_base
             total_raw = len(df_bonds)
             ytm_col = pd.to_numeric(df_bonds['YTM_PCT'], errors='coerce')
@@ -516,15 +525,12 @@ with tab5:
                     mae_val = _m.get('MAE', '—')
                     final_n = _m.get('final_n_iter', '—')
 
-                    # --- Карточка метрик с пояснениями ---
                     st.markdown("### 📈 Результаты обученной модели")
 
-                    c1, c2, c3 = st.columns(3)
+                    c1, c2 = st.columns(2)
                     c1.metric("R² (тест)", f"{r2_val}")
                     c2.metric("MAE (тест), п.п.", f"{mae_val}")
-                    c3.metric("Итераций (финал)", f"{final_n}")
 
-                    # Пояснение метрик прямо под карточкой
                     with st.expander("📖 Разъяснение метрик", expanded=True):
                         st.markdown(f"""
                         - **R² = {r2_val}** — модель объясняет **{float(r2_val)*100:.1f}%** дисперсии доходности YTM.
@@ -532,11 +538,8 @@ with tab5:
                         - **MAE = {mae_val} п.п.** — средняя абсолютная ошибка прогноза.
                           Например, для бумаги с фактической YTM = 15%, модель в среднем предскажет
                           значение в диапазоне 15% ± {mae_val} п.п.
-                        - **Итераций = {final_n}** — количество деревьев в ансамбле после early stopping
-                          (больше не всегда лучше — ранняя остановка предотвращает переобучение).
                         """)
 
-                    # --- Предобработка датасета ---
                     with st.expander("📋 Данные о предобработке датасета", expanded=True):
                         st.markdown(f"""
                         | Параметр | Значение |
@@ -556,7 +559,6 @@ with tab5:
                         что даёт **устойчивое качество предсказаний**.
                         """)
 
-                    # --- Архитектура ---
                     with st.expander("🏗 Архитектура и гиперпараметры", expanded=True):
                         gsp = hp.get("grid_search_params", {})
                         arch_cols = st.columns(2)
@@ -571,7 +573,6 @@ with tab5:
                             st.markdown("**CV folds:** {}".format(hp.get("cv_folds", "—")))
                             st.markdown("**Scoring:** `{}`".format(hp.get("scoring", "—")))
 
-                    # Пометка о последнем обучении
                     st.caption(
                         f"Последнее обучение: R² ≈ {r2_val}, "
                         f"MAE ≈ {mae_val} п.п.; "
@@ -582,7 +583,6 @@ with tab5:
 
             strat_labels = {"Ladder": "🪜 Лестница", "Barbell": "🏋️ Гантеля", "Wheel": "🎡 Колесо"}
 
-            # Сравнение стратегий по ML-скору при текущих параметрах боковой панели
             st.markdown("**Сравнение стратегий (текущие ограничения слева)**")
             journal_ml = load_journal()
             existing_ml = get_current_holdings(journal_ml)
@@ -649,6 +649,5 @@ with tab5:
     else:
         st.warning("⚠️ Файл `ml_model.py` не найден.")
 
-# Подвал
 st.divider()
 st.caption("🎓 Дипломный проект | Data Science")

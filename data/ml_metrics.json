@@ -1,6 +1,6 @@
 {
-  "R2": 0.7716931198954347,
-  "MAE": 2.218709728813563,
+  "R2": 0.8231980703320685,
+  "MAE": 1.8821178797044062,
   "features": [
     "YEARS_TO_MATURITY",
     "COUPONPERCENT",
@@ -14,10 +14,10 @@
   "algorithm": "RandomForestRegressor",
   "hyperparameters": {
     "grid_search_params": {
-      "max_depth": null,
-      "min_samples_leaf": 1,
+      "max_depth": 15,
+      "min_samples_leaf": 2,
       "min_samples_split": 2,
-      "n_estimators": 300
+      "n_estimators": 100
     },
     "cv_folds": 5,
     "scoring": "neg_mean_absolute_error"
