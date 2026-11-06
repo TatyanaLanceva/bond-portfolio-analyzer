@@ -7,31 +7,42 @@ ML-прогноз справедливой доходности и ранжир�
 модифицированная дюрация, число оставшихся купонов) + GridSearch гиперпараметров.
 """
 import json
-import pickle
+from datetime import datetime
+import hashlib
+import joblib
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
-from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.model_selection import TimeSeriesSplit, cross_val_score, GridSearchCV
 from sklearn.preprocessing import StandardScaler
 
-MODEL_PATH = "data/ml_model.pkl"
-SCALER_PATH = "data/ml_scaler.pkl"
-METRICS_PATH = "data/ml_metrics.json"
+MODEL_PATH = Path("data/ml_model.joblib")
+SCALER_PATH = Path("data/ml_scaler.joblib")
+MODEL_SHA256 = "0000000000000000000000000000000000000000000000000000000000000000"  # зафиксировать после обучения
+METRICS_PATH = Path("data/ml_metrics.json")
+
+
+def _verify_sha256(path: Path, expected: str) -> None:
+    if not expected or expected == "0" * 64:
+        return
+    actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    if actual != expected:
+        raise RuntimeError(f"Хеш файла {path.name} не совпадает — файл повреждён или подменён")
+
+
+def load_model():
+    if not MODEL_PATH.exists() or not SCALER_PATH.exists():
+        raise FileNotFoundError("Модель не обучена. Запустите train_model().")
+    _verify_sha256(MODEL_PATH, MODEL_SHA256)
+    model = joblib.load(MODEL_PATH)
+    scaler = joblib.load(SCALER_PATH)
+    return model, scaler
 
 # Признаки (базовые + новые)
-FEATURES = [
-    'YEARS_TO_MATURITY',      # срок до погашения (лет)
-    'COUPONPERCENT',           # купонная ставка (%)
-    'LASTPRICE',               # цена в % от номинала
-    'RATING_SCORE',            # рейтинг-скор (0=AAA … 16=CCC)
-    'FACEVALUE',               # номинал (₽)
-    'IS_GOVERNMENT',           # 1 — ОФЗ, 0 — корпоративная
-    'MOD_DURATION',            # модифицированная дюрация (годы)
-    'COUPONS_REMAINING',       # число оставшихся купонных выплат
-]
+FEATURES = ["DURATION_YEARS", "COUPON_PCT", "YTM_PCT", "RATING_SCORE", "IS_AMORTIZING"]
 
 
 def _ensure_lastprice(df_m: pd.DataFrame) -> pd.DataFrame:
@@ -215,22 +226,46 @@ def train_and_save_model(df):
     final_model.fit(X_full_s, y)
 
     Path("data").mkdir(exist_ok=True)
-    with open(MODEL_PATH, 'wb') as f:
-        pickle.dump(final_model, f)
-    with open(SCALER_PATH, 'wb') as f:
-        pickle.dump(scaler_full, f)
+    joblib.dump(final_model, MODEL_PATH, compress=3)
+    joblib.dump(scaler_full, SCALER_PATH, compress=3)
     with open(METRICS_PATH, 'w', encoding='utf-8') as f:
         json.dump(metrics, f, ensure_ascii=False, indent=2)
+
+    # Save model metadata
+    META_PATH = MODEL_PATH.with_suffix(".meta.json")
+    meta = {
+        "trained_at": datetime.utcnow().isoformat(),
+        "features": FEATURES,
+        "target": TARGET,
+        "r2_test": round(metrics["R2"], 4),
+        "rows": int(metrics.get("rows", 0)),
+    }
+    META_PATH.write_text(json.dumps(meta, ensure_ascii=False, indent=2, default=str))
+
+    # --- Валидация с TimeSeriesSplit ---
+    df = df.sort_values("MATDATE").reset_index(drop=True)
+    tscv = TimeSeriesSplit(n_splits=5)
+    scores = cross_val_score(final_model, X, y, cv=tscv, scoring="neg_mean_absolute_error")
+    print(f"CV MAE: {-scores.mean():.4f} ± {scores.std():.4f}")
+
+    # --- Анализ важности признаков ---
+    feat_imp = pd.Series(
+        final_model.feature_importances_, index=features
+    ).sort_values(ascending=False)
+    print("\nFeature importances:")
+    print(feat_imp.head(10))
+    feat_imp.to_csv("data/feature_importance.csv", encoding="utf-8-sig")
 
     return final_model, scaler_full, metrics
 
 
 def load_model():
     """Загрузка артефактов; список признаков подхватывается из ml_metrics.json при наличии."""
-    with open(MODEL_PATH, 'rb') as f:
-        model = pickle.load(f)
-    with open(SCALER_PATH, 'rb') as f:
-        scaler = pickle.load(f)
+    if not MODEL_PATH.exists() or not SCALER_PATH.exists():
+        raise FileNotFoundError("Модель не обучена. Запустите train_model().")
+    _verify_sha256(MODEL_PATH, MODEL_SHA256)
+    model = joblib.load(MODEL_PATH)
+    scaler = joblib.load(SCALER_PATH)
     features = list(FEATURES)
     p = Path(METRICS_PATH)
     if p.exists():

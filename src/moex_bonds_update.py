@@ -114,7 +114,7 @@ def fetch_moex_bonds_dataframe(
     raw = raw[raw["YEARS_TO_MATURITY"] > 0]
 
     raw["SHORTNAME"] = raw["SHORTNAME"].astype(str).str.strip()
-    raw["RATING"] = raw["BOARD"].map(lambda b: "AAA" if b == "TQOB" else "BBB")
+    raw["RATING"] = raw["BOARD"].map(lambda b: "AAA" if b == "TQOB" else "N/A")
 
     out = raw[
         [
@@ -136,15 +136,13 @@ def fetch_moex_bonds_dataframe(
     return out.sort_values("ISIN").reset_index(drop=True)
 
 
-def _apply_smartlab_ratings(
+def _apply_ratings(
     df: pd.DataFrame,
     cache_path: str | Path = "data/rating_cache.json",
     pause_sec: float = 2.0,
 ) -> pd.DataFrame:
     """
-    Последовательное обогащение датафрейма рейтингами со smart-lab.ru.
-    Использует только кэш — реальные запросы делаются только через
-    отдельный скрипт tools/enrich_ratings.py.
+    Реальные рейтинги вместо заглушки. ОФЗ = AAA по определению.
     """
     try:
         from .smartlab_ratings import RatingCache
@@ -154,18 +152,18 @@ def _apply_smartlab_ratings(
     cache = RatingCache(cache_path)
     out = df.copy()
     
-    corp_mask = out["RATING"] != "AAA"
-    corp_idx = out.index[corp_mask].tolist()
-    if not corp_idx:
-        return out
+    ofz_mask = df["BOARD"] == "TQOB"
+    corp_mask = df["BOARD"] == "TQCB"
 
-    for idx in corp_idx:
-        isin = str(out.at[idx, "ISIN"]).strip()
-        cached = cache.get(isin)
-        if cached is not None and cached[0] not in ("Нет данных", "Нет ISIN", "Ошибка"):
-            out.at[idx, "RATING"] = cached[0]
+    df.loc[ofz_mask, "RATING"] = "AAA"
 
-    return out
+    if fetch and corp_mask.any():
+        isins = df.loc[corp_mask, "ISIN"].dropna().unique().tolist()
+        ratings = get_ratings_bulk(isins, force_refresh=False)
+        df.loc[corp_mask, "RATING"] = df.loc[corp_mask, "ISIN"].map(ratings).fillna("N/A")
+
+    df["RATING_SCORE"] = df["RATING"].map(rating_score)
+    return df
 
 
 def save_moex_bonds_csv(

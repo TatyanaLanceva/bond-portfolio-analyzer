@@ -22,7 +22,7 @@ import logging
 import random
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Literal
 
@@ -62,6 +62,36 @@ RATING_BARS = {
 
 def _pick_ua() -> str:
     return random.choice(USER_AGENTS)
+
+
+def _session() -> requests.Session:
+    s = requests.Session()
+    retries = Retry(
+        total=4, backoff_factor=1.5,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+    )
+    s.mount("https://", HTTPAdapter(max_retries=retries))
+    s.headers.update({"User-Agent": "bond-portfolio-analyzer/1.0 (educational)"})
+    return s
+
+
+def load_cached_ratings() -> dict[str, RatingResult]:
+    cache_path = Path("data/rating_cache.json")
+    if cache_path.exists():
+        try:
+            data = json.loads(cache_path.read_text(encoding='utf-8'))
+            return {k: RatingResult(**v) for k, v in data.items()}
+        except Exception:
+            return {}
+    return {}
+
+
+def save_cached_ratings(cache: dict[str, RatingResult]) -> None:
+    cache_path = Path("data/rating_cache.json")
+    Path("data").mkdir(exist_ok=True)
+    data = {k: asdict(v) for k, v in cache.items()}
+    cache_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
 
 
 def _width_to_rating(width_pct: float) -> tuple[str | None, str]:
