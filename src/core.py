@@ -50,7 +50,7 @@ def load_bonds_data(file_path: str = "data/bonds_current.csv") -> pd.DataFrame:
         "BB+": 10, "BB": 11, "BB-": 12,
         "B+": 13, "B": 14, "B-": 15, "CCC": 16
     }
-    df['RATING_SCORE'] = df['RATING'].str.strip().map(RATING_MAP).fillna(20)
+    df['RATING_SCORE'] = df['RATING'].astype(str).str.strip().str.upper().map(RATING_MAP).fillna(20)
     return df.reset_index(drop=True)
 
 
@@ -252,7 +252,7 @@ def build_portfolio(df: pd.DataFrame, strategy: str, budget: float,
             if part_pool.empty: continue
             # Пробуем купить несколько бумаг из каждой части.
             # Если одна бумага не подходит по бюджету — пробуем следующую, не пропуская всю часть.
-            for _, bond in part_pool.iterrows():
+            for _, bond in part_pool.sort_values('DIRTY_PRICE_RUB').iterrows():
                 if bond['ISIN'] in bought_isins:
                     continue
                 if try_buy(bond, budget * 0.25):
