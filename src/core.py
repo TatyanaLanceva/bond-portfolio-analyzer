@@ -33,8 +33,7 @@ def load_bonds_data(file_path: str = "data/bonds_current.csv") -> pd.DataFrame:
         
     df['COUPONPERCENT'] = df['COUPONPERCENT'].fillna(0.0)
     missing_fv = df['FACEVALUE'].isna().sum()
-    # ВАЖНО: убираем старый fallback 1000.0
-    # df["FACEVALUE"] = df["FACEVALUE"].fillna(1000.0)  # ← УДАЛИТЬ
+    # Fallback номинала убран: фильтрация происходит ниже по ISIN и FACEVALUE > 0
     
     # Фильтрация
     df = df[df['ISIN'].astype(str).str.startswith('RU')]

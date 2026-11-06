@@ -1,3 +1,13 @@
+import json
+import logging
+import time
+from pathlib import Path
+from typing import Optional
+
+import pandas as pd
+import requests
+from dataclasses import dataclass
+
 @dataclass
 class FaceValueResult:
     facevalue: Optional[float]
@@ -5,8 +15,21 @@ class FaceValueResult:
     source: str          # 'moex_iss' | 'moex_bondization' | 'missing' | 'non_rub'
     reason: str = ""
 
+REQUEST_TIMEOUT = 30
+MOEX_SECURITIES_URL = "https://iss.moex.com/iss/securities/{isin}.json"
+MOEX_BONDIZATION_URL = "https://iss.moex.com/iss/statistics/engines/stock/markets/bonds/bondization/{isin}.json"
+RUB_UNITS = {"SUR", "RUB"}
+DEFAULT_CACHE = Path("data/facevalue_cache.json")
+SLEEP_BETWEEN_REQUESTS = 1.0
 
-def _load_cache(path: Path) -> dict:
+
+def _save_cache(cache_data: dict, path: Path = DEFAULT_CACHE) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(cache_data, f, ensure_ascii=False, indent=2)
+
+
+def _load_cache(path: Path = DEFAULT_CACHE) -> dict:
     if not path.exists():
         return {}
     try:

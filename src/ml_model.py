@@ -21,7 +21,7 @@ from sklearn.preprocessing import StandardScaler
 
 MODEL_PATH = Path("data/ml_model.joblib")
 SCALER_PATH = Path("data/ml_scaler.joblib")
-MODEL_SHA256 = "0000000000000000000000000000000000000000000000000000000000000000"  # зафиксировать после обучения
+MODEL_SHA256 = "0000000000000000000000000000000000000000000000000000000000000000"  # Хэш модели — зафиксировать после обучения
 METRICS_PATH = Path("data/ml_metrics.json")
 
 
@@ -32,14 +32,6 @@ def _verify_sha256(path: Path, expected: str) -> None:
     if actual != expected:
         raise RuntimeError(f"Хеш файла {path.name} не совпадает — файл повреждён или подменён")
 
-
-def load_model():
-    if not MODEL_PATH.exists() or not SCALER_PATH.exists():
-        raise FileNotFoundError("Модель не обучена. Запустите train_model().")
-    _verify_sha256(MODEL_PATH, MODEL_SHA256)
-    model = joblib.load(MODEL_PATH)
-    scaler = joblib.load(SCALER_PATH)
-    return model, scaler
 
 # Признаки (базовые + новые)
 FEATURES = ["DURATION_YEARS", "COUPON_PCT", "YTM_PCT", "RATING_SCORE", "IS_AMORTIZING"]

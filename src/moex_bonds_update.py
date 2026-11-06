@@ -9,38 +9,52 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
+import requests
+from urllib.util import Retry
 
 logger = logging.getLogger(__name__)
 
 BASE_ISS = "https://iss.moex.com/iss/engines/stock/markets/bonds/boards"
 DEFAULT_BOARDS: tuple[str, ...] = ("TQCB", "TQOB")
 
+# Ротация User-Agent для избежания блокировок
+USER_AGENTS = [
+    "bond-portfolio-analyzer/1.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+]
+
+
+def _get_session() -> requests.Session:
+    """Создает requests.Session с Retry-адтервером для устойчивых HTTP-запросов."""
+    session = requests.Session()
+    retry = Retry(
+        total=5,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+    )
+    adapter = requests.adapters.HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
 
 def _http_json(url: str, timeout: float = 120.0) -> dict:
     """HTTP GET → JSON-словарь. При ошибках HTTP/сети логирует и пробрасывает."""
-    req = urllib.request.Request(url, headers={"User-Agent": "bond-portfolio-analyzer/1.0"})
+    ua = {"User-Agent": USER_AGENTS[hash(url) % len(USER_AGENTS)]}
+    session = _get_session()
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            status = resp.status
-            if status >= 400:
-                raise urllib.error.HTTPError(
-                    url, status, f"HTTP {status} от MOEX", resp.headers, None
-                )
-            return json.loads(resp.read().decode("utf-8", errors="replace"))
-    except urllib.error.HTTPError as e:
-        logger.error("MOEX HTTP %s: %s", e.code, url)
-        raise
-    except urllib.error.URLError as e:
-        logger.error("MOEX сеть: %s — %s", url, e.reason)
-        raise
-    except json.JSONDecodeError as e:
-        logger.error("MOEX ответ не JSON: %s — %s", url, e)
+        resp = session.get(url, headers=ua, timeout=timeout)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.RequestException as e:
+        logger.error("HTTP ошибка %s: %s", url, e)
         raise
 
 
@@ -139,19 +153,16 @@ def fetch_moex_bonds_dataframe(
 def _apply_ratings(
     df: pd.DataFrame,
     cache_path: str | Path = "data/rating_cache.json",
+    fetch: bool = False,
     pause_sec: float = 2.0,
 ) -> pd.DataFrame:
     """
     Реальные рейтинги вместо заглушки. ОФЗ = AAA по определению.
     """
-    try:
-        from .smartlab_ratings import RatingCache
-    except ImportError:
-        from smartlab_ratings import RatingCache
+    from smartlab_ratings import get_ratings_bulk, rating_to_score
 
-    cache = RatingCache(cache_path)
-    out = df.copy()
-    
+    df = df.copy()
+
     ofz_mask = df["BOARD"] == "TQOB"
     corp_mask = df["BOARD"] == "TQCB"
 
@@ -162,7 +173,7 @@ def _apply_ratings(
         ratings = get_ratings_bulk(isins, force_refresh=False)
         df.loc[corp_mask, "RATING"] = df.loc[corp_mask, "ISIN"].map(ratings).fillna("N/A")
 
-    df["RATING_SCORE"] = df["RATING"].map(rating_score)
+    df["RATING_SCORE"] = df["RATING"].map(rating_to_score)
     return df
 
 
@@ -196,7 +207,7 @@ def save_moex_bonds_csv(
         raise RuntimeError("MOEX вернул пустой набор строк — проверьте сеть или доски.")
 
     if fetch_ratings:
-        df = _apply_smartlab_ratings(df, pause_sec=ratings_pause)
+        df = _apply_ratings(df, pause_sec=ratings_pause)
 
     df.to_csv(outp, index=False, encoding="utf-8-sig")
     return outp
