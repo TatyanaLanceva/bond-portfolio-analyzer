@@ -40,3 +40,26 @@ def test_filter_warns_when_soft():
         df, enabled=True, amortizing_isins=None, fail_on_missing_data=False
     )
     assert len(out) == len(df)  # ничего не потеряли, но warning в логе
+def test_coupon_before_amortization_on_same_date():
+    from datetime import date
+    from src.cashflow import calculate_full_cashflow
+
+    flows = calculate_full_cashflow(
+        purchase_date=date(2026, 1, 1),
+        maturity_date=date(2027, 1, 1),
+        coupon_rate_pct=12,
+        coupon_period_months=6,
+        initial_facevalue=1000,
+        purchase_price_pct=100,
+        amortization_schedule=[(date(2026, 7, 1), 500)],
+        tax_rate=0,
+    )
+
+    first_coupon = flows[
+        (flows["date"] == date(2026, 7, 1))
+        & (flows["type"] == "coupon")
+    ]
+
+    assert len(first_coupon) == 1
+    assert first_coupon.iloc[0]["coupon"] == 60.0
+    assert flows["net"].sum() == 90.0

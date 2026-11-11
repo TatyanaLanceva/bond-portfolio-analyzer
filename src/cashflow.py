@@ -49,7 +49,7 @@ def calculate_full_cashflow(
     # общий таймлайн
     events: list[tuple[date, str]] = [(dt, "coupon") for dt in coupon_dates]
     events += [(dt, "amort") for dt in amort_map]
-    events.sort()
+    events.sort(key=lambda event: (event[0], 0 if event[1] == "coupon" else 1))
 
     outstanding = initial_facevalue
     rows: list[dict] = []
