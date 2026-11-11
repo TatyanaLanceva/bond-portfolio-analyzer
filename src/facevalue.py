@@ -1,6 +1,8 @@
 import json
 import logging
 import time
+
+logger = logging.getLogger(__name__)
 from pathlib import Path
 from typing import Optional
 
@@ -203,3 +205,9 @@ def enrich_facevalue(
             len(bad), ", ".join(bad["ISIN"].astype(str).head(10)),
         )
     return out[~out["FACEVALUE_SOURCE"].isin(["missing", "non_rub"])].reset_index(drop=True)
+def get_face_values(df, cache_path=DEFAULT_CACHE, use_cache=True, allow_non_rub=False):
+    return enrich_facevalue(df, cache_path=cache_path, use_cache=use_cache, allow_non_rub=allow_non_rub)
+
+def calculate_dirty_price(facevalue: float, price_pct: float, accrued_interest: float = 0.0) -> float:
+    from cashflow import calculate_dirty_price as _cf_dirty_price
+    return _cf_dirty_price(facevalue, price_pct, accrued_interest)

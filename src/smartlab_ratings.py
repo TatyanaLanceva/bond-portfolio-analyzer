@@ -1,16 +1,61 @@
-"""Парсер кредитных рейтингов со smart-lab.ru."""
-
+﻿
 import json
+import logging
 import re
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import requests
 from bs4 import BeautifulSoup
 
+logger = logging.getLogger(__name__)
+
 CACHE_PATH = Path("data/rating_cache.json")
 CACHE_TTL = 24 * 3600
+
+@dataclass
+class RatingInfo:
+    """диная структура одного кредитного рейтинга.
+
+    оля:
+        isin: ISIN бумаги.
+        rating: Текст рейтинга (например `""BBB-""`).
+        agency: гентство, выдавшее рейтинг.
+        scale: ациональная или международная шкала.
+        outlook: рогноз или `None`.
+        rating_date: ата выставления рейтинга в формате YYYY-MM-DD.
+        status: дин из `confirmed` / `not_found` / `unavailable` / `invalid`.
+    """
+
+    isin: str
+    rating: str | None = None
+    agency: str | None = None
+    scale: str | None = None
+    outlook: str | None = None
+    rating_date: str | None = None
+    status: str = "confirmed"
+
+
+def normalize_rating(
+    rating: str | None,
+) -> str | None:
+    """ормализовать обозначение рейтинга.
+
+    Args:
+        rating: сходный рейтинг (строка или `None`).
+
+    Returns:
+        str | None: ормализованный рейтинг в верхнем регистре без пробелов,
+            или `None`, если входной параметр пуст/невалиден.
+    """
+    if not rating:
+        return None
+
+    value = rating.strip().upper()
+    value = re.sub(r"[^A-Z0-9+\\-]", "", value)
+    return value or None
 
 def _load_cache(cache_path: Path = CACHE_PATH) -> Dict:
     if not cache_path.exists():
@@ -31,6 +76,7 @@ def _load_cache(cache_path: Path = CACHE_PATH) -> Dict:
     except (json.JSONDecodeError, OSError):
         return {}
 
+
 def _save_cache(cache_data: Dict, cache_path: Path = CACHE_PATH) -> None:
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     current_time = time.time()
@@ -43,8 +89,9 @@ def _save_cache(cache_data: Dict, cache_path: Path = CACHE_PATH) -> None:
     with open(cache_path, "w", encoding="utf-8-sig") as f:
         json.dump(formatted, f, ensure_ascii=False, indent=2)
 
+
 def _get_rating_from_smartlab(isin: str) -> Optional[str]:
-    url = f"https://smart-lab.ru/q/bonds/{isin}/"
+    url = "https://smart-lab.ru/q/bonds/{isin}/"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "text/html,application/xhtml+xml",
@@ -73,8 +120,9 @@ def _get_rating_from_smartlab(isin: str) -> Optional[str]:
                 return rating
         return None
     except Exception as e:
-        print(f"Ошибка парсинга для {isin}: {e}")
+        logger.exception("Ошибка парсинга для %s: %s", isin, e)
         return None
+
 
 def get_ratings_bulk(
     isins: List[str],
@@ -110,6 +158,7 @@ def get_ratings_bulk(
             cache[isin] = rating
             _save_cache(cache)
     return results
+
 
 def rating_to_score(rating: Optional[str]) -> int:
     RATING_MAP = {

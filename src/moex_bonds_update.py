@@ -10,11 +10,16 @@ import json
 import logging
 import shutil
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import pandas as pd
 import requests
-from urllib.util import Retry
+from urllib3.util.retry import Retry
+
+try:
+    from src.moex_client import create_http_session, get_json
+except ImportError:  # тесты добавляют src/ в sys.path напрямую
+    from moex_client import create_http_session, get_json
 
 logger = logging.getLogger(__name__)
 
@@ -30,53 +35,147 @@ USER_AGENTS = [
 ]
 
 
-def _get_session() -> requests.Session:
-    """Создает requests.Session с Retry-адтервером для устойчивых HTTP-запросов."""
-    session = requests.Session()
-    retry = Retry(
-        total=5,
-        backoff_factor=1,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"],
-    )
-    adapter = requests.adapters.HTTPAdapter(max_retries=retry)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    return session
+def fetch_iss_block(
+    session: requests.Session,
+    url: str,
+    block_name: str,
+    params: dict[str, Any] | None = None,
+    page_size: int = 100,
+    max_pages: int = 100,
+) -> pd.DataFrame:
+    """Получить все страницы заданного блока MOEX ISS одним объединённым DataFrame.
 
+    Args:
+        session: HTTP-сессия.
+        url: Адрес ISS-эндпоинта.
+        block_name: Ключ блока в JSON-ответе (например ``securities``).
+        params: Базовые параметры запроса. ``iss.meta=off`` добавляется автоматически.
+        page_size: Число записей на одну страницу.
+        max_pages: Максимальное число запросов по пагинации.
 
-def _http_json(url: str, timeout: float = 120.0) -> dict:
-    """HTTP GET → JSON-словарь. При ошибках HTTP/сети логирует и пробрасывает."""
-    ua = {"User-Agent": USER_AGENTS[hash(url) % len(USER_AGENTS)]}
-    session = _get_session()
-    try:
-        resp = session.get(url, headers=ua, timeout=timeout)
-        resp.raise_for_status()
-        return resp.json()
-    except requests.exceptions.RequestException as e:
-        logger.error("HTTP ошибка %s: %s", url, e)
-        raise
+    Returns:
+        pd.DataFrame: Все строки блока, пронумерованные заново.
 
+    Raises:
+        ValueError: при отсутствии блока, пустых колонок/строк или исчерпании лимита.
+    """
+    base_params = dict(params or {})
+    base_params["iss.meta"] = "off"
 
-def _fetch_board(board_id: str, timeout: float = 120.0) -> pd.DataFrame:
-    """Одна доска: справочник + доходности; склейка по SECID."""
-    q = (
-        f"{BASE_ISS}/{board_id}/securities.json?iss.meta=off"
-        "&securities.columns=SECID,SHORTNAME,ISIN,MATDATE,FACEVALUE,FACEUNIT,COUPONPERCENT,ACCRUEDINT,STATUS"
-        "&marketdata_yields.columns=SECID,EFFECTIVEYIELD,WAPRICE"
-    )
-    data = _http_json(q, timeout=timeout)
-    sec = data.get("securities") or {}
-    yld = data.get("marketdata_yields") or {}
-    if not sec.get("data"):
+    frames: list[pd.DataFrame] = []
+
+    for page in range(max_pages):
+        request_params = {
+            **base_params,
+            "start": page * page_size,
+        }
+
+        response = get_json(
+            session=session,
+            url=url,
+            params=request_params,
+        )
+
+        block = response.get(block_name)
+
+        if not isinstance(block, dict):
+            raise ValueError(
+                f"В ответе отсутствует блок {block_name!r} "
+                f"(найденный тип: {type(block).__name__})"
+            )
+
+        columns = block.get("columns", [])
+        rows = block.get("data", [])
+
+        if not columns or not rows:
+            # Пустой блок значит, что выгрузка закончилась
+            break
+
+        frame = pd.DataFrame(rows, columns=columns)
+        frames.append(frame)
+
+        if len(rows) < page_size:
+            # Последняя страница
+            break
+
+    else:
+        raise RuntimeError(
+            f"Превышен лимит пагинации: {max_pages} страниц для блока {block_name!r}"
+        )
+
+    if not frames:
         return pd.DataFrame()
-    df_s = pd.DataFrame(sec["data"], columns=sec["columns"])
-    df_y = pd.DataFrame(yld["data"], columns=yld["columns"]) if yld.get("data") else pd.DataFrame()
-    if df_y.empty:
+
+    return pd.concat(frames, ignore_index=True)
+
+
+def _ensure_session() -> requests.Session:
+    """Вернуть общую HTTP-сессию, созданную один раз для всего клиента."""
+    return create_http_session()
+
+
+def _fetch_board(
+    session: requests.Session,
+    board_id: str,
+    timeout: float = 120.0,
+) -> pd.DataFrame:
+    """Одна доска: справочник + доходности; склейка по SECID (left join).
+
+    Получает блоки ``securities`` и ``marketdata_yields`` независимо с пагинацией,
+    чтобы выпуски без рыночных данных тоже сохранялись.
+    """
+    securities_url = (
+        f"{BASE_ISS}/{board_id}/securities.json"
+    )
+    marketdata_url = (
+        f"{BASE_ISS}/{board_id}/marketdata.json"
+    )
+
+    # Параметры справочника
+    sec_params: dict[str, Any] = {
+        "iss.meta": "off",
+        "securities.columns": "SECID,SHORTNAME,ISIN,MATDATE,FACEVALUE,FACEUNIT,"
+        "COUPONPERCENT,ACCRUEDINT,STATUS",
+    }
+
+    # Параметры рыночных данных
+    mkt_params: dict[str, Any] = {
+        "iss.meta": "off",
+        "marketdata.columns": "SECID,EFFECTIVEYIELD,WAPRICE",
+    }
+
+    sec_df = fetch_iss_block(
+        session=session,
+        url=securities_url,
+        block_name="securities",
+        params=sec_params,
+        page_size=100,
+        max_pages=20,
+    )
+
+    if sec_df.empty:
         return pd.DataFrame()
-    df = df_s.merge(df_y, on="SECID", how="inner")
-    df["BOARD"] = board_id
-    return df
+
+    mkt_df = fetch_iss_block(
+        session=session,
+        url=marketdata_url,
+        block_name="marketdata",
+        params=mkt_params,
+        page_size=100,
+        max_pages=20,
+    )
+
+    if not mkt_df.empty:
+        # Left join: не теряем бумаги без доходности
+        sec_df = sec_df.merge(
+            mkt_df,
+            on="SECID",
+            how="left",
+            suffixes=("", "_mkt"),
+        )
+
+    sec_df["BOARD"] = board_id
+    return sec_df
 
 
 def fetch_moex_bonds_dataframe(
@@ -88,11 +187,13 @@ def fetch_moex_bonds_dataframe(
     (до финальных фильтров ядра load_bonds_data).
     """
     parts: list[pd.DataFrame] = []
+    session = _ensure_session()
+
     for bid in boards:
         bid = str(bid).strip()
         if not bid:
             continue
-        chunk = _fetch_board(bid, timeout=timeout)
+        chunk = _fetch_board(session=session, board_id=bid, timeout=timeout)
         if not chunk.empty:
             parts.append(chunk)
     if not parts:
@@ -159,12 +260,20 @@ def _apply_ratings(
     """
     Реальные рейтинги вместо заглушки. ОФЗ = AAA по определению.
     """
-    from smartlab_ratings import get_ratings_bulk, rating_to_score
+    try:
+        from src.smartlab_ratings import get_ratings_bulk, rating_to_score
+    except ImportError:
+        from smartlab_ratings import get_ratings_bulk, rating_to_score
 
     df = df.copy()
 
-    ofz_mask = df["BOARD"] == "TQOB"
-    corp_mask = df["BOARD"] == "TQCB"
+    if "BOARD" in df.columns:
+        ofz_mask = df["BOARD"] == "TQOB"
+        corp_mask = df["BOARD"] == "TQCB"
+    else:
+        isin_col = df["ISIN"].astype(str).str.strip()
+        ofz_mask = isin_col.str.startswith("RU000A")
+        corp_mask = ~ofz_mask
 
     df.loc[ofz_mask, "RATING"] = "AAA"
 
@@ -172,6 +281,99 @@ def _apply_ratings(
         isins = df.loc[corp_mask, "ISIN"].dropna().unique().tolist()
         ratings = get_ratings_bulk(isins, force_refresh=False)
         df.loc[corp_mask, "RATING"] = df.loc[corp_mask, "ISIN"].map(ratings).fillna("N/A")
+
+    df["RATING_SCORE"] = df["RATING"].map(rating_to_score)
+    return df
+
+
+def _apply_smartlab_ratings(
+    df: pd.DataFrame,
+    cache_path: str | Path = "data/rating_cache.json",
+    pause_sec: float = 2.0,
+) -> pd.DataFrame:
+    """Пополнить реальными кредитными рейтингами корпоративные облигации.
+
+    ОФЗ (доска TQOB) считается AAA по определению. Для корпоративных бумаг (TQCB)
+    запрашивает рейтинг со smart-lab.ru; результат кэшируется в JSON.
+
+    Args:
+        df: Датафрейм с колонками BOARD и ISIN.
+        cache_path: Путь к файлу кэша рейтингов.
+        pause_sec: Пауза между запросами к smart-lab.ru (секунды).
+
+    Returns:
+        pd.DataFrame: Дублированный датафрейм с заполненными RATING и RATING_SCORE.
+    """
+    try:
+        from src.smartlab_ratings import get_ratings_bulk, rating_to_score
+    except ImportError:
+        from smartlab_ratings import get_ratings_bulk, rating_to_score
+
+    df = df.copy()
+
+    if "BOARD" in df.columns:
+        ofz_mask = df["BOARD"] == "TQOB"
+        corp_mask = df["BOARD"] == "TQCB"
+    else:
+        isin_col = df["ISIN"].astype(str).str.strip()
+        ofz_mask = isin_col.str.startswith("RU000A")
+        corp_mask = ~ofz_mask
+
+    df.loc[ofz_mask, "RATING"] = "AAA"
+
+    if corp_mask.any():
+        isins = df.loc[corp_mask, "ISIN"].dropna().unique().tolist()
+        ratings = get_ratings_bulk(isins, force_refresh=False)
+        df.loc[corp_mask, "RATING"] = (
+            df.loc[corp_mask, "ISIN"].map(ratings).fillna("N/A")
+        )
+
+    df["RATING_SCORE"] = df["RATING"].map(rating_to_score)
+    return df
+
+
+def enrich_ratings(
+    df: pd.DataFrame,
+    cache_path: str | Path = "data/rating_cache.json",
+    pause_sec: float = 2.0,
+) -> pd.DataFrame:
+    """Публичный обогащатель кредитных рейтингов без требования колонки BOARD.
+
+    Тип бумаги определяется по ISIN: RU000A* — ОФЗ (РЦБ, рейтинг AAA),
+    остальные — корпоративные (рейтинги запрашиваются из Smart-Lab кэша,
+    отсутствующий рейтинг помечается как 'N/A', а не подставляется как BBB).
+
+    Args:
+        df: DataFrame с колонками ISIN и (опционально) BOARD, RATING.
+        cache_path: Путь к JSON-кэшу рейтингов Smart-Lab.
+        pause_sec: Пауза между запросами к Smart-Lab (сек).
+
+    Returns:
+        pd.DataFrame: копия df с заполненными колонками RATING и RATING_SCORE.
+    """
+    try:
+        from src.smartlab_ratings import get_ratings_bulk, rating_to_score
+    except ImportError:
+        from smartlab_ratings import get_ratings_bulk, rating_to_score
+
+    df = df.copy()
+
+    if "BOARD" in df.columns:
+        ofz_mask = df["BOARD"] == "TQOB"
+        corp_mask = df["BOARD"] == "TQCB"
+    else:
+        isin_col = df["ISIN"].astype(str).str.strip()
+        ofz_mask = isin_col.str.startswith("RU000A")
+        corp_mask = ~ofz_mask
+
+    df.loc[ofz_mask, "RATING"] = "AAA"
+
+    if corp_mask.any():
+        isins = df.loc[corp_mask, "ISIN"].dropna().unique().tolist()
+        ratings = get_ratings_bulk(isins, force_refresh=False)
+        df.loc[corp_mask, "RATING"] = (
+            df.loc[corp_mask, "ISIN"].map(ratings).fillna("N/A")
+        )
 
     df["RATING_SCORE"] = df["RATING"].map(rating_to_score)
     return df

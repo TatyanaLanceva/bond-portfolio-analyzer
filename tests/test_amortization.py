@@ -2,6 +2,7 @@
 
 from unittest.mock import patch, MagicMock
 
+import pandas as pd
 import pytest
 
 from src.moex_amort import check_amortization_bulk, drop_amortizing_bonds, AmortizationInfo
@@ -39,4 +40,3 @@ def test_filter_warns_when_soft():
         df, enabled=True, amortizing_isins=None, fail_on_missing_data=False
     )
     assert len(out) == len(df)  # ничего не потеряли, но warning в логе
-EOF

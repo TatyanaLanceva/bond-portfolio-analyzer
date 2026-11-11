@@ -40,14 +40,28 @@ def test_moex_success(mock_get, csv_df, tmp_path):
     assert b["FACEVALUE_SOURCE"] == "moex_iss"
 
 
+
 @patch("src.facevalue.requests.get")
-def test_moex_error_excludes_bond_not_fallback_to_1000(mock_get, csv_df, tmp_path):
+def test_moex_error_excludes_bond_not_fallback_to_1000(
+    mock_get, csv_df, tmp_path
+):
     mock_get.side_effect = __import__("requests").ConnectionError("boom")
-    out = enrich_facevalue(csv_df, cache_path=tmp_path / "c.json", use_cache=False)
-    # бумаги без номинала исключены, 1000.0 нигде нет
+
+    out = enrich_facevalue(
+        csv_df,
+        cache_path=tmp_path / "c.json",
+        use_cache=False,
+    )
+
+    # Облигации без подтвержденного номинала исключаются.
     assert "RU000A100002" not in out["ISIN"].values
     assert "RU000A100003" not in out["ISIN"].values
-    assert 1000.0 not in out["FACEVALUE"].values
+
+    # Облигация с подтвержденным CSV-номиналом сохраняется.
+    assert len(out) == 1
+    assert out.iloc[0]["ISIN"] == "RU000A100001"
+    assert out.iloc[0]["FACEVALUE"] == 1000.0
+    assert out.iloc[0]["FACEVALUE_SOURCE"] == "csv"
 
 
 @patch("src.facevalue.requests.get")

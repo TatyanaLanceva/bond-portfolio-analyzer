@@ -11,12 +11,13 @@ from datetime import datetime
 import hashlib
 import joblib
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
-from sklearn.model_selection import TimeSeriesSplit, cross_val_score, GridSearchCV
+from sklearn.model_selection import TimeSeriesSplit, cross_val_score, GridSearchCV, train_test_split
 from sklearn.preprocessing import StandardScaler
 
 MODEL_PATH = Path("data/ml_model.joblib")
@@ -33,8 +34,9 @@ def _verify_sha256(path: Path, expected: str) -> None:
         raise RuntimeError(f"Хеш файла {path.name} не совпадает — файл повреждён или подменён")
 
 
-# Признаки (базовые + новые)
-FEATURES = ["DURATION_YEARS", "COUPON_PCT", "YTM_PCT", "RATING_SCORE", "IS_AMORTIZING"]
+# Признаки (базовые + новые) — YTM_PCT исключен чтобы избежать утечки цели
+FEATURES = ["DURATION_YEARS", "COUPON_PCT", "RATING_SCORE", "IS_AMORTIZING", "IS_GOVERNMENT"]
+TARGET = "YTM_PCT"
 
 
 def _ensure_lastprice(df_m: pd.DataFrame) -> pd.DataFrame:
@@ -66,13 +68,13 @@ def _add_engineered_features(df_m: pd.DataFrame) -> pd.DataFrame:
     rating = out.get('RATING', pd.Series(dtype=str)).astype(str).str.strip()
     out['IS_GOVERNMENT'] = (
         isin.str.startswith('RU000A') &
-        (shortname.str.upper().str.startswith('ОФЗ') | (rating == 'AAA'))
+        (shortname.str.upper().str.startswith('ОФЗ'))
     ).astype(int)
 
     # MOD_DURATION: приближённая модифицированная дюрация
-    ytm = pd.to_numeric(out.get('YTM_PCT', 0), errors='coerce').fillna(0)
+    ytm = 0
     yrs = pd.to_numeric(out.get('YEARS_TO_MATURITY', 0), errors='coerce').fillna(0)
-    out['MOD_DURATION'] = yrs / (1.0 + ytm / 100.0)
+    out['MOD_DURATION'] = yrs
     out['MOD_DURATION'] = out['MOD_DURATION'].replace([np.inf, -np.inf], 0).fillna(0)
 
     # COUPONS_REMAINING: число оставшихся купонных выплат до погашения
@@ -220,6 +222,9 @@ def train_and_save_model(df):
     Path("data").mkdir(exist_ok=True)
     joblib.dump(final_model, MODEL_PATH, compress=3)
     joblib.dump(scaler_full, SCALER_PATH, compress=3)
+    # Аддитивно сохраняем .pkl-копии для совместимости со старыми артефактами
+    joblib.dump(final_model, MODEL_PATH.with_suffix(".pkl"), compress=3)
+    joblib.dump(scaler_full, SCALER_PATH.with_suffix(".pkl"), compress=3)
     with open(METRICS_PATH, 'w', encoding='utf-8') as f:
         json.dump(metrics, f, ensure_ascii=False, indent=2)
 
@@ -251,13 +256,25 @@ def train_and_save_model(df):
     return final_model, scaler_full, metrics
 
 
+def _resolve_artifact_path(primary: Path) -> Path | None:
+    """Возвращает существующий путь к артефакту (.joblib или .pkl) или None."""
+    if primary.exists():
+        return primary
+    alt = primary.with_suffix(".pkl" if primary.suffix == ".joblib" else ".joblib")
+    if alt.exists():
+        return alt
+    return None
+
+
 def load_model():
     """Загрузка артефактов; список признаков подхватывается из ml_metrics.json при наличии."""
-    if not MODEL_PATH.exists() or not SCALER_PATH.exists():
+    model_path = _resolve_artifact_path(MODEL_PATH)
+    scaler_path = _resolve_artifact_path(SCALER_PATH)
+    if model_path is None or scaler_path is None:
         raise FileNotFoundError("Модель не обучена. Запустите train_model().")
-    _verify_sha256(MODEL_PATH, MODEL_SHA256)
-    model = joblib.load(MODEL_PATH)
-    scaler = joblib.load(SCALER_PATH)
+    _verify_sha256(model_path, MODEL_SHA256)
+    model = joblib.load(model_path)
+    scaler = joblib.load(scaler_path)
     features = list(FEATURES)
     p = Path(METRICS_PATH)
     if p.exists():

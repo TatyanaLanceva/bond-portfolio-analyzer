@@ -152,8 +152,8 @@ def test_enrich_with_ml_scores_excess_calculation(ml_sample_df):
 # Тест load_model (файлы .pkl могут не существовать — проверяем обработку)
 # ---------------------------------------------------------------------------
 
-@patch("src.ml_model.MODEL_PATH", "nonexistent_model.pkl")
-@patch("src.ml_model.SCALER_PATH", "nonexistent_scaler.pkl")
+@patch("src.ml_model.MODEL_PATH", Path("nonexistent_model.pkl"))
+@patch("src.ml_model.SCALER_PATH", Path("nonexistent_scaler.pkl"))
 def test_load_model_missing_files_raises():
     with pytest.raises(FileNotFoundError):
         load_model()
